@@ -1,0 +1,22 @@
+{
+  "name": "fieldservice-scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Job scheduler and service reports for field service businesses",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "archiver": "7.0.1",
+    "exceljs": "4.4.0",
+    "express": "4.21.2",
+    "leaflet": "1.9.4",
+    "pdfkit": "0.15.2",
+    "pg": "8.13.1",
+    "qrcode": "1.5.4"
+  }
+}

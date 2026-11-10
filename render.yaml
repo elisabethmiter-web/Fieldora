@@ -1,0 +1,41 @@
+# Render Blueprint for Field Service Scheduler
+# Creates one web service (the app) and one PostgreSQL database.
+databases:
+  - name: fieldservice-db
+    plan: basic-256mb
+    region: ohio
+    databaseName: fieldservice
+    user: fieldservice
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: fieldservice-scheduler
+    runtime: node
+    plan: starter
+    region: ohio
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fieldservice-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      # Outlook email for service reports (optional). Fill these in on the
+      # Render dashboard after following "Connect Outlook email" in README.md.
+      - key: MS_TENANT_ID
+        sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MAIL_FROM
+        sync: false

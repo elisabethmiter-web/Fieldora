@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Field Service Scheduler</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#1D2125">
+<meta name="description" content="Field service job scheduler">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Scheduler">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#ECEEEA; --surface:#FFFFFF; --sunk:#E2E5E0; --ink:#1D2125; --ink-2:#555C62; --line:#CDD2CC;
+  --yellow:#F4C20D; --yellow-ink:#1D2125; --steel:#3E5B70;
+  --pm:#3E7A55; --repair:#B4472B; --install:#3E5B70; --assess:#7A5C99; --portable:#9A7400;
+  --outage:#C8331B;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16191B; --surface:#20252A; --sunk:#1A1E21; --ink:#E9ECE8; --ink-2:#A2AAAF; --line:#353C42;
+    --steel:#8FB0C7; --pm:#7DC496; --repair:#F08A6C; --install:#8FB0C7; --assess:#BFA2DD; --portable:#E3BE4A; --outage:#FF6E55;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16191B; --surface:#20252A; --sunk:#1A1E21; --ink:#E9ECE8; --ink-2:#A2AAAF; --line:#353C42;
+  --steel:#8FB0C7; --pm:#7DC496; --repair:#F08A6C; --install:#8FB0C7; --assess:#BFA2DD; --portable:#E3BE4A; --outage:#FF6E55;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none !important}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);
+  font-family:"Archivo",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--ink)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
+a{color:var(--steel)}
+
+/* Header */
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--ink);color:#F3F4F1}
+.bar{max-width:1280px;margin:0 auto;display:flex;align-items:center;gap:16px;padding:12px 20px}
+.brand{display:flex;align-items:baseline;gap:10px;margin-right:auto}
+.brand b{font-stretch:68%;font-weight:800;font-size:26px;letter-spacing:.01em;line-height:1}
+.brand b span{color:var(--yellow)}
+.brand small{color:#B9BEB8;font-size:13px}
+.btn{border:0;border-radius:6px;padding:9px 14px;font-weight:600;cursor:pointer;background:var(--sunk);color:var(--ink)}
+.btn.primary{background:var(--yellow);color:var(--yellow-ink)}
+.btn.ghost{background:transparent;border:1px solid var(--line)}
+.btn.danger{background:transparent;color:var(--outage);border:1px solid currentColor}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.acct{background:transparent;color:#F3F4F1;border:1px solid #4A5157}
+.auth-intro{grid-column:1/-1;margin:0;color:var(--ink-2)}
+.err{grid-column:1/-1;color:var(--outage);font-weight:600;min-height:1.2em;margin:0}
+.acct-sec{padding:16px 20px;border-top:1px solid var(--line)}
+.acct-sec:first-of-type{border-top:0}
+.acct-sec h3{margin:0 0 10px;font-stretch:75%;font-size:19px}
+.acct-sec form{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.acct-sec form .btn{justify-self:start}
+#teamList .row{padding:8px 0}
+@media (max-width:560px){.acct-sec form{grid-template-columns:1fr}}
+nav.tabs{max-width:1280px;margin:0 auto;display:flex;gap:4px;padding:0 20px;overflow-x:auto}
+nav.tabs button{background:none;border:0;color:#B9BEB8;padding:10px 12px 12px;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}
+nav.tabs button[aria-selected="true"]{color:#fff;border-bottom-color:var(--yellow)}
+nav.tabs .count[hidden]{display:none}
+nav.tabs .count{display:inline-block;min-width:20px;margin-left:6px;padding:0 6px;border-radius:10px;background:var(--yellow);color:var(--yellow-ink);font-size:12px;text-align:center}
+
+main{max-width:1280px;margin:0 auto;padding:20px}
+.view[hidden]{display:none}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.toolbar h1{font-stretch:75%;font-weight:800;font-size:30px;margin:0 auto 0 0;line-height:1.1}
+.status-line{font-size:13px;color:var(--ink-2);margin:-8px 0 14px}
+
+/* Week board */
+.week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.day{background:var(--surface);border:1px solid var(--line);border-radius:8px;min-height:220px;display:flex;flex-direction:column}
+.day.today{border-color:var(--yellow);box-shadow:inset 0 4px 0 var(--yellow)}
+.day-head{display:flex;align-items:baseline;gap:6px;padding:10px 10px 6px}
+.day-head .num{font-stretch:62%;font-weight:800;font-size:34px;line-height:.9}
+.day-head .dow{font-size:13px;color:var(--ink-2)}
+.day-head .add{margin-left:auto;background:none;border:0;color:var(--ink-2);font-size:20px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:4px}
+.day-head .add:hover{background:var(--sunk);color:var(--ink)}
+.day-body{display:flex;flex-direction:column;gap:6px;padding:4px 8px 10px;flex:1}
+.day-empty{color:var(--ink-2);font-size:13px;padding:2px 2px}
+.job{display:block;width:100%;text-align:left;background:var(--sunk);border:0;border-left:4px solid var(--c,var(--steel));border-radius:4px;padding:7px 8px;cursor:pointer}
+.job:hover{filter:brightness(.97)}
+.job .t{font-size:12px;color:var(--ink-2);display:flex;gap:6px;align-items:center}
+.job .n{font-weight:600;font-size:14px;line-height:1.25;margin-top:1px;overflow-wrap:anywhere}
+.job .w{font-size:12px;color:var(--ink-2)}
+.job.done{opacity:.55}
+.job.done .n{text-decoration:line-through}
+.flag{font-size:11px;font-weight:700;color:#fff;background:var(--outage);border-radius:3px;padding:0 5px}
+.flag.parts{background:var(--portable);color:#1D2125}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:13px;color:var(--ink-2)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--c);margin-right:6px;vertical-align:-1px}
+
+/* Lists */
+.list{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row .main{min-width:0}
+.row .name{font-weight:600}
+.row .sub{font-size:13px;color:var(--ink-2)}
+.row .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.pill{font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;background:var(--sunk);white-space:nowrap}
+.pill.over{background:var(--outage);color:#fff}
+.pill.soon{background:var(--yellow);color:var(--yellow-ink)}
+.pill.ok{color:var(--pm)}
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:8px;padding:28px;text-align:center;color:var(--ink-2)}
+.empty p{margin:0 0 12px}
+input[type=search]{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px 10px;min-width:220px}
+
+/* Shop board */
+.shop{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.lane{background:var(--sunk);border-radius:8px;padding:10px}
+.lane h2{font-stretch:75%;font-size:19px;margin:2px 4px 10px}
+.lane .card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:8px}
+.lane .card .name{font-weight:600}
+.lane .card .sub{font-size:13px;color:var(--ink-2);margin-bottom:8px}
+.lane .card .acts{display:flex;gap:6px;flex-wrap:wrap}
+.lane .card .btn{padding:6px 10px;font-size:13px}
+
+/* Dialog */
+dialog{border:0;border-radius:10px;padding:0;width:min(560px,calc(100vw - 24px));max-height:calc(100dvh - 40px);background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(20,22,24,.55)}
+.dlg-head{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
+.dlg-head h2{margin:0;font-stretch:75%;font-size:24px;margin-right:auto}
+.dlg-head .x{background:none;border:0;font-size:24px;cursor:pointer;color:var(--ink-2);line-height:1}
+.dlg-body{padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dlg-foot{display:flex;gap:8px;padding:14px 20px;border-top:1px solid var(--line)}
+.dlg-foot .spacer{margin-right:auto}
+.field{display:flex;flex-direction:column;gap:4px}
+.field.full{grid-column:1/-1}
+.field label{font-size:13px;font-weight:600;color:var(--ink-2)}
+.field input,.field select,.field textarea{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+.field textarea{min-height:70px;resize:vertical}
+.hint{font-size:12px;color:var(--ink-2)}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg label{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:14px;color:var(--ink);font-weight:500}
+.seg input{width:auto;margin:0;accent-color:var(--steel)}
+.seg label:has(input:checked){border-color:var(--steel);background:var(--sunk);font-weight:600}
+.cust-card{grid-column:1/-1;background:var(--sunk);border-radius:6px;padding:10px 12px;font-size:13px}
+.cust-card b{font-size:14px}
+.lock-warn{grid-column:1/-1;display:flex;gap:10px;align-items:flex-start;background:var(--yellow);color:var(--yellow-ink);border-radius:6px;padding:10px 12px;font-size:14px;line-height:1.4}
+.lock-warn[hidden]{display:none}
+.lock-warn b{display:block;font-size:15px}
+.lock-warn .ico{font-size:20px;line-height:1}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:6px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+
+@media (max-width:900px){
+  .week{grid-template-columns:1fr}
+  .day{min-height:0}
+  .day-head .num{font-size:28px}
+  .shop{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .bar{padding:10px 14px} main{padding:14px}
+  .brand small{display:none}
+  .dlg-body{grid-template-columns:1fr}
+  .row{grid-template-columns:1fr}
+  .row .acts{justify-content:flex-start}
+  input[type=search]{min-width:0;width:100%}
+}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+/* ---- v2 additions ---- */
+:root{--personal:#6B7A86;--busy:#8A9197}
+.job.personal{background:repeating-linear-gradient(135deg,var(--sunk) 0 8px,transparent 8px 16px),var(--sunk)}
+.job.busy{cursor:default;background:var(--sunk);border-left-style:dotted}
+.job.busy:hover{filter:none}
+.tag{font-size:11px;font-weight:700;border-radius:3px;padding:0 5px;background:var(--line);color:var(--ink)}
+.role-pill{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border-radius:3px;padding:1px 6px;background:var(--sunk);color:var(--ink-2)}
+.ok-pill{background:var(--pm);color:#fff}
+.field-row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.field-row .field{flex:1;min-width:140px}
+.check{display:flex;gap:8px;align-items:center;font-size:14px;font-weight:500;color:var(--ink)}
+.check input{width:auto;margin:0;accent-color:var(--steel)}
+.sub-h{grid-column:1/-1;margin:6px 0 -2px;font-stretch:75%;font-size:18px}
+.form-box{grid-column:1/-1;background:var(--sunk);border-radius:6px;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px}
+.form-box .grow{flex:1;min-width:160px}
+
+/* Map */
+.map-wrap{display:grid;grid-template-columns:340px minmax(0,1fr);gap:12px;align-items:start}
+.map-panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px;max-height:calc(100dvh - 210px);overflow:auto}
+#map{height:calc(100dvh - 210px);min-height:420px;border-radius:8px;border:1px solid var(--line);background:var(--sunk);z-index:0}
+.mode-seg{display:flex;background:var(--sunk);border-radius:6px;padding:3px;gap:3px}
+.mode-seg button{flex:1;border:0;background:transparent;border-radius:4px;padding:7px;font-weight:600;cursor:pointer;color:var(--ink-2)}
+.mode-seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.cand{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:7px 4px;border-top:1px solid var(--line);font-size:14px}
+.cand:first-child{border-top:0}
+.cand input{margin:0;accent-color:var(--steel);width:18px;height:18px}
+.cand .sub{font-size:12px;color:var(--ink-2)}
+.stopnum{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:10px;background:var(--ink);color:var(--bg);font-size:11px;font-weight:700;margin-right:4px}
+.map-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--ink-2)}
+.map-legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--c);margin-right:5px;vertical-align:-1px;border:1px solid rgba(0,0,0,.25)}
+.leaflet-popup-content{font-family:inherit;font-size:13px;margin:10px 12px}
+.leaflet-popup-content b{font-size:14px}
+.leaflet-popup-content .pop-acts{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.leaflet-popup-content .btn{padding:5px 9px;font-size:12px}
+.leaflet-marker-icon.pin-num{display:flex !important}
+.pin-num{background:var(--ink);color:#fff;border:2px solid #fff;border-radius:50%;width:24px !important;height:24px !important;margin:-12px 0 0 -12px !important;display:flex;align-items:center;justify-content:center;font:700 12px/1 "Archivo",sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.pin-home{background:var(--yellow);color:#1D2125}
+#cMap{grid-column:1/-1;height:200px;border-radius:6px;border:1px solid var(--line);z-index:0}
+.hist{grid-column:1/-1;max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+.hist .row{padding:8px 12px}
+
+/* Service form */
+#formDlg{width:min(760px,calc(100vw - 24px))}
+.chk-row{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1.3fr) 150px minmax(0,1fr);gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.chk-row label{font-size:14px;font-weight:500;color:var(--ink)}
+.chk-row select,.chk-row input{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 8px;width:100%}
+.chk-row select.attn{border-color:var(--outage);color:var(--outage);font-weight:700}
+.chk-row select.good{border-color:var(--pm);color:var(--pm);font-weight:700}
+.contents{display:contents !important}
+dialog .dlg-foot{position:sticky;bottom:0;background:var(--surface);z-index:2}
+.quick{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
+#formBody.is-done > :not(#fDone){display:none !important}
+.done-panel{grid-column:1/-1;background:var(--sunk);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.done-panel .acts{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Security */
+.qr-box{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.qr-box img{width:180px;height:180px;background:#fff;padding:6px;border-radius:6px;border:1px solid var(--line)}
+.secret{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;letter-spacing:.04em;background:var(--sunk);padding:6px 8px;border-radius:4px;overflow-wrap:anywhere}
+.codes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;background:var(--sunk);padding:10px;border-radius:6px;margin:8px 0}
+.team-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.team-row:first-child{border-top:0}
+.team-row .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+.team-row select{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.team-row .btn{padding:6px 10px;font-size:13px}
+#acctDlg{width:min(640px,calc(100vw - 24px))}
+#acctDlg.forced .not-forced{display:none !important}
+
+@media (max-width:900px){
+  .map-wrap{grid-template-columns:1fr}
+  .map-panel{max-height:none;order:2}
+  #map{height:55dvh;min-height:320px}
+}
+@media (max-width:560px){
+  .chk-row{grid-template-columns:1fr 156px}
+  .chk-row input{grid-column:1/-1}
+  .team-row{grid-template-columns:1fr}
+  .team-row .acts{justify-content:flex-start}
+}
+#impDlg{width:min(860px,calc(100vw - 24px))}
+.imp-body{padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.imp-steps{display:flex;gap:6px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.imp-steps span{padding:3px 10px;border-radius:999px;background:var(--sunk)}
+.imp-steps span.on{background:var(--ink);color:var(--bg);font-weight:700}
+.src-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.src-card{border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.src-card h3{margin:0;font-stretch:75%;font-size:20px}
+.src-card input[type=url],.src-card input[type=file]{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+.map-table{border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:52dvh}
+.map-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) 220px;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line)}
+.map-row:first-child{border-top:0;position:sticky;top:0;background:var(--sunk);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);z-index:1}
+.map-row .ex{font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.map-row select{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%}
+.map-row select.skip{color:var(--ink-2)}
+.counts{display:flex;gap:8px;flex-wrap:wrap}
+.counts .pill{font-size:13px;padding:4px 10px}
+.warn-box{background:var(--sunk);border-left:4px solid var(--yellow);border-radius:6px;padding:10px 12px;font-size:14px}
+.warn-box p{margin:0 0 4px}.warn-box p:last-child{margin:0}
+.prev-table{width:100%;border-collapse:collapse;font-size:13px}
+.prev-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);padding:6px 8px;border-bottom:1px solid var(--line)}
+.prev-table td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.prev-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px}
+.radio-list{display:flex;flex-direction:column;gap:6px}
+.progress{height:10px;background:var(--sunk);border-radius:5px;overflow:hidden}
+.progress > div{height:100%;background:var(--yellow);width:0;transition:width .3s}
+.extra-list{grid-column:1/-1;display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:4px 14px;font-size:14px;background:var(--sunk);border-radius:6px;padding:10px 12px}
+.extra-list dt{color:var(--ink-2);font-weight:600}.extra-list dd{margin:0;overflow-wrap:anywhere}
+@media (max-width:640px){.src-grid{grid-template-columns:1fr}.map-row{grid-template-columns:1fr 1fr}.map-row .ex{grid-column:1/-1;order:3}}
+.logo-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo-box{width:220px;height:80px;border:1px dashed var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden}
+.logo-box img{max-width:200px;max-height:66px}
+.export-list{display:grid;grid-template-columns:auto 1fr;gap:10px 12px;align-items:center}
+.export-list .btn{text-decoration:none;text-align:center}
+@media (max-width:560px){.export-list{grid-template-columns:1fr}.export-list .hint{margin-bottom:6px}}
+#fbDlg{width:min(980px,calc(100vw - 24px))}
+.fb-body{padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.fb-top{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+.fb-top .field{min-width:200px;flex:1}
+.fb-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fb-assign{display:flex;flex-wrap:wrap;gap:6px 16px}
+.fb-sec{border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.fb-sec-head{display:flex;gap:8px;align-items:center;padding:10px 12px;background:var(--sunk);border-radius:8px 8px 0 0}
+.fb-sec-head input{flex:1;font-weight:700;font-size:16px}
+.fb-field{display:grid;grid-template-columns:minmax(0,2.2fr) 150px minmax(0,1.3fr) auto auto;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line)}
+.fb-field:first-child{border-top:0}
+.fb-body input[type=text],.fb-body select,.fb-body input:not([type]){background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%}
+.fb-icons{display:flex;gap:2px}
+.fb-icons button{background:none;border:1px solid transparent;border-radius:5px;padding:4px 7px;cursor:pointer;color:var(--ink-2);font-size:15px;line-height:1}
+.fb-icons button:hover{border-color:var(--line);color:var(--ink)}
+.fb-icons button.del:hover{color:var(--outage)}
+.fb-add{padding:8px 12px;border-top:1px solid var(--line)}
+.fb-add .btn{padding:6px 10px;font-size:13px}
+.fb-req{font-size:13px;white-space:nowrap}
+@media (max-width:760px){.fb-grid{grid-template-columns:1fr}.fb-field{grid-template-columns:1fr 1fr}.fb-field > :first-child{grid-column:1/-1}}
+.pw-wrap{position:relative;display:block;width:100%}
+.pw-wrap input{width:100%;padding-right:46px !important}
+.pw-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:38px;height:34px;display:flex;align-items:center;justify-content:center;background:none;border:0;border-radius:5px;color:var(--ink-2);cursor:pointer}
+.pw-toggle:hover{color:var(--ink);background:var(--sunk)}
+.pw-toggle svg{width:20px;height:20px}
+.brand{min-width:0;flex:1}
+.brand img{height:34px;max-width:140px;object-fit:contain;background:#fff;border-radius:6px;padding:2px 4px;align-self:center}
+.brand b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
+.ind-types{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr);gap:6px 10px;align-items:center}
+.ind-types .k{font-size:13px;color:var(--ink-2)}
+.ind-types input[type=text]{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%}
+#indForm{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:560px){#indForm{grid-template-columns:1fr}.ind-types{grid-template-columns:auto 1fr}.ind-types .board{grid-column:2}}
+.install-tip{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:20;max-width:520px;margin:0 auto;background:var(--ink);color:#F3F4F1;border-radius:10px;padding:12px 12px 12px 14px;display:flex;gap:12px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+.install-tip img{width:40px;height:40px;border-radius:9px;flex:none}
+.install-tip .txt{flex:1;font-size:14px;line-height:1.35}
+.install-tip .txt b{display:block;font-size:15px}
+.install-tip .btn{padding:8px 12px}
+.install-tip .x{background:none;border:0;color:#B9BEB8;font-size:22px;line-height:1;cursor:pointer;padding:4px}
+.steps{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:8px}
+.steps li{line-height:1.45}
+.kbd{display:inline-block;border:1px solid var(--line);background:var(--sunk);border-radius:4px;padding:0 6px;font-weight:600;white-space:nowrap}
+.share-ico{display:inline-block;width:16px;height:18px;vertical-align:-3px}
+body:not(.role-owner) .owner-only{display:none !important}
+</style>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand"><img id="brandLogo" alt="" hidden><b id="brandName">Field Service</b><small>Job scheduler</small></div>
+    <button class="btn primary" id="newJobBtn">New job</button>
+    <button class="btn acct" id="installBtn" hidden>Install app</button>
+    <button class="btn acct" id="acctBtn">Account</button>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-view="schedule" aria-selected="true">Schedule</button>
+    <button role="tab" data-view="map" aria-selected="false" class="work-only">Map</button>
+    <button role="tab" data-view="due" aria-selected="false" class="work-only">Maintenance due<span class="count" id="dueCount" hidden></span></button>
+    <button role="tab" data-view="shop" aria-selected="false" class="work-only" id="shopTab"><span id="shopTabLabel">Shop</span><span class="count" id="shopCount" hidden></span></button>
+    <button role="tab" data-view="customers" aria-selected="false" class="work-only">Customers</button>
+  </nav>
+</header>
+
+<main>
+  <p class="status-line" id="storeStatus"></p>
+
+  <section class="view" id="view-schedule">
+    <div class="toolbar">
+      <h1 id="weekTitle">This week</h1>
+      <button class="btn ghost" id="prevWeek" aria-label="Previous week">‹ Prev</button>
+      <button class="btn ghost" id="thisWeek">Today</button>
+      <button class="btn ghost" id="nextWeek" aria-label="Next week">Next ›</button>
+    </div>
+    <div class="week" id="week"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="view" id="view-map" hidden>
+    <div class="toolbar"><h1>Map</h1></div>
+    <div class="map-wrap">
+      <aside class="map-panel">
+        <div class="mode-seg" role="group" aria-label="Map mode">
+          <button type="button" data-mode="plan" aria-pressed="true">Plan a trip</button>
+          <button type="button" data-mode="day" aria-pressed="false">Day route</button>
+        </div>
+
+        <div id="planPane">
+          <div class="field"><label for="pStart">Start from</label><select id="pStart"></select></div>
+          <div class="field-row" style="margin-top:8px">
+            <div class="field"><label for="pRadius">Within</label>
+              <select id="pRadius"><option value="15">15 km</option><option value="30" selected>30 km</option><option value="50">50 km</option><option value="80">80 km</option><option value="150">150 km</option></select></div>
+            <div class="field"><label for="pDue">Service due</label>
+              <select id="pDue"><option value="2">within 2 weeks</option><option value="4">within 4 weeks</option><option value="8" selected>within 8 weeks</option><option value="13">within 3 months</option><option value="all">any customer</option></select></div>
+          </div>
+          <p class="hint" style="margin:6px 0 0">Overdue customers are always included. Customers already booked are left out.</p>
+          <button class="btn primary" id="pFind" style="margin-top:10px;width:100%">Find customers</button>
+          <div id="pResults" style="margin-top:10px"></div>
+        </div>
+
+        <div id="dayPane" hidden>
+          <div class="field"><label for="dDate">Day</label><input type="date" id="dDate"></div>
+          <div id="dResults" style="margin-top:10px"></div>
+        </div>
+
+        <div class="map-legend">
+          <span style="--c:#C8331B">Overdue</span><span style="--c:#F4C20D">Due soon</span><span style="--c:#3E7A55">Booked</span><span style="--c:#3E5B70">On a plan</span><span style="--c:#9AA1A6">No plan</span>
+        </div>
+        <p class="hint" id="mapMissing" style="margin:0"></p>
+      </aside>
+      <div id="map" role="application" aria-label="Customer map"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-due" hidden>
+    <div class="toolbar"><h1>Maintenance due</h1></div>
+    <div id="dueList"></div>
+  </section>
+
+  <section class="view" id="view-shop" hidden>
+    <div class="toolbar"><h1 id="shopTitle">Shop</h1></div>
+    <div class="shop" id="shopBoard"></div>
+  </section>
+
+  <section class="view" id="view-customers" hidden>
+    <div class="toolbar">
+      <h1>Customers</h1>
+      <input type="search" id="custSearch" placeholder="Search name, town, model" aria-label="Search customers">
+      <button class="btn ghost" id="importBtn">Import</button>
+      <button class="btn primary" id="newCustBtn">Add customer</button>
+    </div>
+    <div id="custList"></div>
+  </section>
+</main>
+
+<!-- Job dialog -->
+<dialog id="jobDlg" aria-labelledby="jobDlgTitle">
+  <form method="dialog" id="jobForm">
+    <div class="dlg-head"><h2 id="jobDlgTitle">New job</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="lock-warn" id="jLock" role="alert" hidden><span class="ico" aria-hidden="true">⚠</span><div><b></b><span></span></div></div>
+      <div class="field full" id="jTypeWrap">
+        <label>Type</label>
+        <div class="seg" id="jType"></div>
+      </div>
+      <div class="field full" id="jTitleWrap" hidden>
+        <label for="jTitle">What is it?</label>
+        <input id="jTitle" maxlength="120" placeholder="Dentist, school pickup, day off…">
+        <span class="hint">Personal time blocks the schedule. Everyone with access can see it.</span>
+      </div>
+      <div class="field full" id="jCustWrap">
+        <label for="jCustomer">Customer</label>
+        <select id="jCustomer"></select>
+        <span class="hint">Not listed? <a href="#" id="jAddCust">Add a customer</a></span>
+      </div>
+      <div class="cust-card" id="jCustCard" hidden></div>
+      <div class="field"><label for="jDate">Date</label><input type="date" id="jDate" required></div>
+      <div class="field"><label for="jTime">Start time</label><input type="time" id="jTime" value="09:00" step="900">
+        <label class="check" id="jAllDayWrap" hidden style="margin-top:4px"><input type="checkbox" id="jAllDay"> All day</label></div>
+      <div class="field"><label for="jDur">Hours</label><input type="number" id="jDur" min="0.25" step="0.25" value="2"></div>
+      <div class="field" id="jPriorityWrap">
+        <label for="jPriority">Priority</label>
+        <select id="jPriority"><option value="normal">Normal</option><option value="outage">Power outage — urgent</option></select>
+      </div>
+      <div class="field full"><label for="jNotes" id="jNotesLabel">What’s the job?</label><textarea id="jNotes" placeholder="Symptoms, parts to bring, gate code…"></textarea></div>
+      <div class="field" id="jStatusWrap" hidden>
+        <label for="jStatus">Status</label>
+        <select id="jStatus"><option value="booked">Booked</option><option value="parts">Waiting on parts</option><option value="done">Done</option><option value="cancelled">Cancelled</option></select>
+      </div>
+      <div class="field" id="jStageWrap" hidden>
+        <label for="jStage">Shop status</label>
+        <select id="jStage"><option value="pickup">To pick up</option><option value="shop">In the shop</option><option value="ready">Ready to return</option><option value="returned">Returned</option></select>
+      </div>
+      <div class="form-box" id="jFormBox" hidden>
+        <div class="grow"><b>Service form</b><br><span id="jFormStatus" class="hint"></span></div>
+        <button type="button" class="btn primary" id="jFormBtn">Open service form</button>
+        <a class="btn ghost" id="jPdfLink" target="_blank" rel="noopener" hidden style="text-decoration:none">View PDF</a>
+      </div>
+      <div class="field full" id="jReportWrap" hidden>
+        <label for="jReport">Internal notes</label>
+        <textarea id="jReport" placeholder="Notes for yourself — not sent to the customer"></textarea>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn danger" id="jDelete" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary" id="jSave">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Service form dialog -->
+<dialog id="formDlg" aria-labelledby="formTitle">
+  <form id="svcForm">
+    <div class="dlg-head"><h2 id="formTitle">Service form</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body" id="formBody">
+      <div class="cust-card" id="fCustCard"></div>
+      <div class="field full" id="fTplWrap" hidden><label for="fTpl">Form</label><select id="fTpl"></select></div>
+      <div class="field"><label for="fDate">Service date</label><input type="date" id="fDate"></div>
+      <div class="field"><label for="fNext">Next service due</label><input type="date" id="fNext"></div>
+      <div id="fDyn" class="contents"></div>
+      <h3 class="sub-h">Send the report</h3>
+      <label class="check full" style="grid-column:1/-1"><input type="checkbox" id="fSend" checked> Email the PDF report to the customer when I finish</label>
+      <div class="field full"><label for="fEmail">Customer email</label><input id="fEmail" type="email" multiple placeholder="name@example.com"><span class="hint" id="fMailHint"></span></div>
+      <p class="err" id="fError" role="alert"></p>
+      <div class="done-panel" id="fDone" hidden></div>
+    </div>
+    <div class="dlg-foot" id="formFoot">
+      <button type="button" class="btn ghost" id="fDraft">Save draft</button>
+      <span class="spacer"></span>
+      <button type="submit" class="btn primary" id="fFinish">Finish</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Customer dialog -->
+<dialog id="custDlg" aria-labelledby="custDlgTitle">
+  <form method="dialog" id="custForm">
+    <div class="dlg-head"><h2 id="custDlgTitle">Add customer</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="lock-warn" id="cLock" role="alert" hidden><span class="ico" aria-hidden="true">⚠</span><div><b></b><span></span></div></div>
+      <div class="field full"><label for="cName">Name</label><input id="cName" required autocomplete="off"></div>
+      <div class="field"><label for="cPhone">Phone</label><input id="cPhone" type="tel"></div>
+      <div class="field"><label for="cEmail">Email</label><input id="cEmail" type="email"></div>
+      <div class="field"><label for="cAddress">Street address</label><input id="cAddress"></div>
+      <div class="field"><label for="cTown">Town</label><input id="cTown" list="towns"></div>
+      <div class="field full">
+        <div class="field-row"><div class="field"><label>Map location</label><span class="hint" id="cGeoStatus">Not on the map yet</span></div>
+        <button type="button" class="btn ghost" id="cGeoBtn">Find address on map</button></div>
+      </div>
+      <div id="cMap" aria-label="Customer location map"></div>
+      <p class="hint" style="grid-column:1/-1;margin:-6px 0 0">Wrong spot? Drag the pin, or click the map where the equipment is.</p>
+      <div class="field"><label for="cEtype" id="cEtypeLabel">Equipment type</label><input id="cEtype" list="etypes"></div>
+      <div class="field"><label for="cBrand" id="cBrandLabel">Brand</label><input id="cBrand" list="brands"></div>
+      <div class="field"><label for="cModel">Model</label><input id="cModel"></div>
+      <div class="field"><label for="cSerial">Serial number</label><input id="cSerial"></div>
+      <div class="field"><label for="cKw" id="cKwLabel">Size</label><input id="cKw" type="number" min="0" step="any"></div>
+      <div class="field" id="cFuelWrap">
+        <label for="cFuel">Fuel / energy</label>
+        <select id="cFuel"><option value="">—</option></select>
+      </div>
+      <div class="field">
+        <label for="cPlan">Maintenance plan</label>
+        <select id="cPlan"><option value="none">No plan</option><option value="12">Yearly</option><option value="6">Every 6 months</option><option value="3">Every 3 months</option></select>
+      </div>
+      <div class="field"><label for="cLast">Last serviced</label><input id="cLast" type="date"><span class="hint">Updates when a maintenance form is finished.</span></div>
+      <div class="field full"><label for="cNotes">Notes</label><textarea id="cNotes" placeholder="Access, gate code, dog on site…"></textarea></div>
+      <h3 class="sub-h" id="cExtraTitle" hidden>Other details</h3>
+      <dl class="extra-list" id="cExtra" hidden></dl>
+      <h3 class="sub-h" id="cHistTitle" hidden>Service history</h3>
+      <div class="hist" id="cHistory" hidden></div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn danger" id="cDelete" hidden>Delete customer</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save customer</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Sign-in dialog -->
+<dialog id="authDlg" aria-labelledby="authTitle">
+  <form id="authForm">
+    <div class="dlg-head"><h2 id="authTitle">Sign in</h2></div>
+    <div class="dlg-body">
+      <p class="auth-intro" id="authIntro"></p>
+      <div class="field full setup-only" hidden><label for="aBiz">Business name</label><input id="aBiz" autocomplete="organization" placeholder="e.g. Northshore Heating &amp; Cooling"></div>
+      <div class="field full setup-only" hidden><label for="aInd">Your trade</label><select id="aInd"></select><span class="hint">Sets up job types, equipment details and service forms for your trade. You can change everything later.</span></div>
+      <div class="field full setup-only" hidden><label for="aTown">Home base town</label><input id="aTown" placeholder="Where trips start, e.g. Goderich, ON"></div>
+      <div class="field full" id="aNameWrap" hidden><label for="aName">Your name</label><input id="aName" autocomplete="name"></div>
+      <div class="field full" id="aUserWrap"><label for="aUser">Username</label><input id="aUser" autocomplete="username" autocapitalize="none"></div>
+      <div class="field full" id="aPassWrap"><label for="aPass">Password</label><input id="aPass" type="password" autocomplete="current-password"><span class="hint">At least 10 characters.</span></div>
+      <div class="field full" id="aCodeWrap" hidden>
+        <label for="aCode">6-digit code from your authenticator app</label>
+        <input id="aCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456">
+        <span class="hint">Lost your phone? Enter one of your recovery codes instead (like 3f9a2-c81d4).</span>
+      </div>
+      <p class="err" id="aError" role="alert"></p>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="aBack" hidden>Back</button><span class="spacer"></span><button type="submit" class="btn primary" id="aSubmit">Sign in</button></div>
+  </form>
+</dialog>
+
+<!-- Account dialog -->
+<dialog id="acctDlg" aria-labelledby="acctTitle">
+  <div class="dlg-head"><h2 id="acctTitle">Account</h2><button type="button" class="x not-forced" data-close aria-label="Close">×</button></div>
+
+  <section class="acct-sec" id="forcedNote" hidden>
+    <p style="margin:0"><b>Two-step login is required.</b> The owner has turned it on for every account. Set it up below to continue.</p>
+  </section>
+
+  <section class="acct-sec">
+    <h3>Two-step login</h3>
+    <div id="tfaBody"></div>
+  </section>
+
+  <section class="acct-sec not-forced">
+    <h3>Install as an app</h3>
+    <div id="installSec"></div>
+  </section>
+
+  <section class="acct-sec not-forced">
+    <h3>Change your password</h3>
+    <form id="pwForm">
+      <div class="field"><label for="pCur">Current password</label><input id="pCur" type="password" required autocomplete="current-password"></div>
+      <div class="field"><label for="pNew">New password</label><input id="pNew" type="password" required autocomplete="new-password"></div>
+      <div class="field"><button type="submit" class="btn primary">Change password</button></div>
+      <p class="err" id="pError" role="alert"></p>
+    </form>
+  </section>
+
+  <section class="acct-sec not-forced owner-only">
+    <h3>Team</h3>
+    <div id="teamList"></div>
+    <form id="addUserForm">
+      <div class="field"><label for="tName">Name</label><input id="tName" required></div>
+      <div class="field"><label for="tUser">Username</label><input id="tUser" required autocapitalize="none" autocomplete="off"></div>
+      <div class="field"><label for="tPass">Temporary password</label><input id="tPass" type="password" required autocomplete="new-password"></div>
+      <div class="field"><label for="tRole">Access</label>
+        <select id="tRole"><option value="staff">Staff — full scheduling</option><option value="owner">Owner — everything</option></select></div>
+      <div class="field full"><span class="hint"><b>Staff</b> can manage jobs, customers, service forms and personal time. <b>Owners</b> can also manage the team, service form designs and settings.</span></div>
+      <div class="field"><button type="submit" class="btn primary">Add person</button></div>
+      <p class="err" id="tError" role="alert"></p>
+    </form>
+  </section>
+
+  <section class="acct-sec not-forced owner-only">
+    <h3>Trade and job types</h3>
+    <form id="indForm">
+      <div class="field full"><label for="iPreset">Trade</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><select id="iPreset" style="flex:1;min-width:200px"></select><button type="button" class="btn ghost" id="iLoadPreset">Use this trade’s defaults</button></div>
+        <span class="hint">Loads the trade’s job types, equipment details and brands below. You can then adjust them before saving.</span></div>
+      <div class="field full"><label>Job types</label><div id="iTypes" class="ind-types"></div></div>
+      <div class="field"><label for="iEquip">What you service is called</label><input id="iEquip" placeholder="e.g. Generator, Equipment, System"></div>
+      <div class="field"><label for="iUnit">Size unit</label><input id="iUnit" placeholder="e.g. kW, Tons, Gallons, Amps"></div>
+      <div class="field full"><label for="iEtypes">Equipment types (comma separated)</label><input id="iEtypes"></div>
+      <div class="field full"><label for="iFuels">Fuel / energy choices (comma separated, blank to hide)</label><input id="iFuels"></div>
+      <div class="field full"><label for="iBrands">Brand suggestions (comma separated)</label><input id="iBrands"></div>
+      <label class="check full" style="grid-column:1/-1"><input type="checkbox" id="iApplyForms"> Also replace my service forms with this trade’s default forms</label>
+      <div class="field"><button type="submit" class="btn primary">Save trade settings</button></div>
+      <p class="err" id="iError" role="alert"></p>
+    </form>
+  </section>
+
+  <section class="acct-sec not-forced owner-only">
+    <h3>Business settings</h3>
+    <form id="bizForm">
+      <div class="field"><label for="bName">Business name</label><input id="bName"></div>
+      <div class="field"><label for="bPhone">Phone</label><input id="bPhone" type="tel"></div>
+      <div class="field"><label for="bEmail">Email</label><input id="bEmail" type="email"></div>
+      <div class="field"><label for="bWeb">Website</label><input id="bWeb"></div>
+      <div class="field full"><span class="hint">These appear on service reports and emails.</span></div>
+      <div class="field"><label for="bHome">Home base (trip start)</label><input id="bHome" placeholder="Town or address"></div>
+      <div class="field" style="justify-content:flex-end"><span class="hint" id="bHomeStatus"></span></div>
+      <label class="check full" style="grid-column:1/-1"><input type="checkbox" id="bReq2fa"> Require two-step login for everyone</label>
+      <div class="field"><button type="submit" class="btn primary">Save settings</button></div>
+      <p class="err" id="bError" role="alert"></p>
+    </form>
+  </section>
+
+  <section class="acct-sec not-forced work-only">
+    <h3>Email</h3>
+    <p class="hint" id="mailStatus" style="margin:0"></p>
+  </section>
+
+  <section class="acct-sec not-forced owner-only">
+    <h3>Service forms and logo</h3>
+    <div class="logo-row">
+      <div class="logo-box" id="logoBox"><span class="hint">No logo</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <span class="hint">Your logo appears at the top of every service report. PNG or JPG; a wide logo on a white or transparent background works best.</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <label class="btn ghost" style="cursor:pointer">Upload logo<input type="file" id="logoFile" accept="image/png,image/jpeg" hidden></label>
+          <button type="button" class="btn ghost" id="logoRemove" hidden>Remove</button>
+        </div>
+      </div>
+    </div>
+    <p class="hint" style="margin:12px 0 8px">Add, remove or reorder the questions on your service forms, and choose which form each job type uses.</p>
+    <button type="button" class="btn primary" id="fbOpen">Customize service forms</button>
+  </section>
+
+  <section class="acct-sec not-forced work-only">
+    <h3>Export data</h3>
+    <p class="hint" style="margin:0 0 10px">Download your information to keep, share with your accountant, or move to another system.</p>
+    <div class="export-list">
+      <a class="btn ghost" href="/api/export/workbook.xlsx" download>Everything in Excel</a><span class="hint">Customers, equipment, jobs, personal time, and every service form’s answers (one sheet per form).</span>
+      <a class="btn ghost" href="/api/export/reports.zip" download id="zipLink">All service reports (PDF)</a><span class="hint">Every report as a PDF, in a folder per customer, in one zip file.</span>
+      <a class="btn ghost" href="/api/export" download>Full backup</a><span class="hint">Everything, including settings and form designs, in one file for safekeeping.</span>
+    </div>
+  </section>
+  <div class="dlg-foot"><span class="spacer"></span><button type="button" class="btn danger" id="logoutBtn">Sign out</button></div>
+</dialog>
+
+<datalist id="towns"></datalist>
+<datalist id="brands"></datalist>
+<datalist id="etypes"></datalist>
+
+<!-- Service form builder -->
+<dialog id="fbDlg" aria-labelledby="fbTitle">
+  <div class="dlg-head"><h2 id="fbTitle">Customize service forms</h2><button type="button" class="x" id="fbClose" aria-label="Close">×</button></div>
+  <div id="fbBody" class="fb-body"></div>
+  <div class="dlg-foot">
+    <button type="button" class="btn danger" id="fbReset">Reset to default</button>
+    <span class="spacer"></span>
+    <button type="button" class="btn ghost" id="fbPreview">Preview PDF</button>
+    <button type="button" class="btn primary" id="fbSave">Save forms</button>
+  </div>
+</dialog>
+
+<!-- Import wizard -->
+<dialog id="impDlg" aria-labelledby="impTitle">
+  <div class="dlg-head"><h2 id="impTitle">Import customers</h2><button type="button" class="x" id="impClose" aria-label="Close">×</button></div>
+  <div id="impBody" class="imp-body"></div>
+  <div class="dlg-foot" id="impFoot"></div>
+</dialog>
+
+<!-- Install instructions -->
+<dialog id="installDlg" aria-labelledby="installTitle">
+  <div class="dlg-head"><h2 id="installTitle">Install the app</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+  <div style="padding:16px 20px" id="installSteps"></div>
+  <div class="dlg-foot"><span class="spacer"></span><button type="button" class="btn primary" data-close>Got it</button></div>
+</dialog>
+
+<div class="install-tip" id="installTip" hidden role="region" aria-label="Install the app">
+  <img src="/icons/icon-192.png" alt="">
+  <div class="txt"><b>Install the app</b>Open it from your home screen like an app.</div>
+  <button type="button" class="btn primary" id="installTipBtn">Install</button>
+  <button type="button" class="x" id="installTipClose" aria-label="Not now">×</button>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
