@@ -146,6 +146,16 @@ The server enforces these rules, not just the screen.
 
 The owner can also reset someone's password or two-step login (for example, if they lose their phone), change their access, or remove them. There always has to be at least one Owner.
 
+## Forgot password
+
+Anyone can tap **Forgot password?** on the sign-in screen, enter their username or email address, and get a link by email to choose a new password.
+
+- **Needs an email address on the account.** The owner adds one during setup; anyone can add or change their own under **Account → Your email**; and the owner can set each person's under **Account → Team → Email**. Two people can share an address (one email lists both accounts).
+- **Needs Outlook connected** (see **Connect Outlook email** below). Until it is, the screen tells people to ask the owner, who can still use **Reset password** in the Team list.
+- **Safe by design:** each link works once and expires after 1 hour; asking again cancels the previous link; requests are rate-limited; and the app gives the same answer whether or not an account exists, so it can't be used to find usernames. Resetting signs the account out everywhere. Two-step login still applies afterwards.
+- **Reset emails are not copied** to the business mailbox or its Sent Items, so people with access to that mailbox can't use someone else's link.
+- **The link's web address** comes from Render automatically (your `.onrender.com` address). **If you add your own web address** (see below), also set `APP_URL` to it on Render, e.g. `https://schedule.yourbusiness.com`, so reset links use it.
+
 ## Two-step login
 
 Each person can turn it on under **Account → Two-step login**: scan the QR code with an authenticator app (Microsoft Authenticator, Google Authenticator, Authy, 1Password, etc.), type the 6-digit code, and save the 8 recovery codes somewhere safe. After that, signing in asks for the password and then a code from the app.
@@ -223,7 +233,7 @@ If someone else has the same job, personal time or customer open, a yellow banne
 
 ## Use your own web address (optional)
 
-To use something like `schedule.yourbusiness.com`: in Render, open the web service → **Settings → Custom Domains**, add the address, then add the CNAME record Render shows wherever the yourbusiness.com domain's DNS is managed. Render issues the HTTPS certificate automatically.
+To use something like `schedule.yourbusiness.com`: in Render, open the web service → **Settings → Custom Domains**, add the address, then add the CNAME record Render shows wherever the yourbusiness.com domain's DNS is managed. Render issues the HTTPS certificate automatically. Then add an environment variable `APP_URL` set to the new address (e.g. `https://schedule.yourbusiness.com`) so password reset emails link to it.
 
 ## Costs, data location and backups
 

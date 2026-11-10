@@ -52,6 +52,13 @@ async function migrate() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_codes JSONB NOT NULL DEFAULT '[]';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+    CREATE TABLE IF NOT EXISTS password_resets (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value JSONB NOT NULL
@@ -208,7 +215,7 @@ function requireAjax(req, res, next) {
 app.use("/api", requireAjax);
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const USER_COLS = "id, username, name, role, session_version, totp_enabled";
+const USER_COLS = "id, username, name, email, role, session_version, totp_enabled";
 
 // Paths a signed-in user may reach before finishing required 2FA setup.
 const SETUP_ALLOWED = new Set(["/api/me", "/api/logout", "/api/2fa/setup", "/api/2fa/enable"]);
@@ -231,7 +238,13 @@ const workers = allow("owner", "staff");
 app.get("/healthz", wrap(async (req, res) => { await pool.query("SELECT 1"); res.send("ok"); }));
 
 /* ---------- setup + sign-in ---------- */
-function publicUser(u) { return { id: u.id, username: u.username, name: u.name, role: u.role, totpEnabled: !!u.totp_enabled }; }
+function publicUser(u) { return { id: u.id, username: u.username, name: u.name, email: u.email || "", role: u.role, totpEnabled: !!u.totp_enabled }; }
+// An email address is optional; when given it must look valid. Used for password reset links.
+function cleanEmail(v) {
+  const e = String(v ?? "").trim().toLowerCase().slice(0, 200);
+  if (e && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e)) return { error: "Check the email address." };
+  return { email: e };
+}
 function validateNewUser(username, password) {
   if (!/^[a-z0-9._-]{3,32}$/i.test(String(username || "").trim())) return "Usernames are 3–32 letters, numbers, dots, dashes or underscores.";
   if (String(password || "").length < 10) return "Passwords need at least 10 characters.";
@@ -240,13 +253,15 @@ function validateNewUser(username, password) {
 
 app.get("/api/setup", wrap(async (req, res) => {
   const { rows } = await pool.query("SELECT count(*)::int AS n FROM users");
-  res.json({ needsSetup: rows[0].n === 0, presets: rows[0].n === 0 ? industries.presetList() : undefined });
+  res.json({ needsSetup: rows[0].n === 0, presets: rows[0].n === 0 ? industries.presetList() : undefined, resetByEmail: mail.configured() });
 }));
 
 app.post("/api/setup", wrap(async (req, res) => {
   const { username, password, name } = req.body || {};
   const err = validateNewUser(username, password);
   if (err) return res.status(400).json({ error: err });
+  const em = cleanEmail(req.body?.email);
+  if (em.error) return res.status(400).json({ error: em.error });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -254,8 +269,8 @@ app.post("/api/setup", wrap(async (req, res) => {
     const { rows } = await client.query("SELECT count(*)::int AS n FROM users");
     if (rows[0].n > 0) { await client.query("ROLLBACK"); return res.status(409).json({ error: "Setup is already done. Sign in instead." }); }
     const ins = await client.query(
-      `INSERT INTO users (username, name, pass_hash, role) VALUES ($1, $2, $3, 'owner') RETURNING ${USER_COLS}`,
-      [username.trim().toLowerCase(), String(name || "").trim(), hashPassword(password)]);
+      `INSERT INTO users (username, name, email, pass_hash, role) VALUES ($1, $2, $3, $4, 'owner') RETURNING ${USER_COLS}`,
+      [username.trim().toLowerCase(), String(name || "").trim(), em.email, hashPassword(password)]);
     await client.query("COMMIT");
     // first-run choices: trade, business name, home base
     const preset = industries.PRESETS[req.body?.industry] ? req.body.industry : "general";
@@ -320,6 +335,86 @@ app.post("/api/login/2fa", wrap(async (req, res) => {
 }));
 
 app.post("/api/logout", (req, res) => { clearSession(res); res.json({ ok: true }); });
+
+/* ---------- forgot password ---------- */
+const RESET_MINUTES = 60;
+// The link must point at this app's real address, never at the Host header a stranger sent
+// (that would let someone get a reset link emailed that points to their own site).
+function appUrl(req) {
+  const base = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
+  if (base) return base.replace(/\/+$/, "");
+  return process.env.NODE_ENV === "production" ? "" : `${req.protocol}://${req.get("host")}`;
+}
+async function sendResetEmail(req, users, to) {
+  const st = await getSettings(); const biz = st.business.name || "Fielora";
+  const base = appUrl(req);
+  if (!base) { console.error("Password reset: set APP_URL so reset links know the app's address."); return; }
+  const links = [];
+  for (const u of users) {
+    const token = crypto.randomBytes(32).toString("base64url");
+    await pool.query("DELETE FROM password_resets WHERE user_id = $1", [u.id]);   // only the newest link works
+    await pool.query("INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, now() + make_interval(mins => $3))", [sha256(token), u.id, RESET_MINUTES]);
+    links.push({ u, url: `${base}/?reset=${token}` });
+  }
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const blocks = links.map(({ u, url }) => `
+    <p style="margin:18px 0 8px 0">${links.length > 1 ? `Account <b>${esc(u.username)}</b>${u.name ? ` (${esc(u.name)})` : ""}:` : `Your username is <b>${esc(u.username)}</b>.`}</p>
+    <p style="margin:0 0 6px 0"><a href="${url}" style="display:inline-block;background:#F4C20D;color:#1D2125;font-weight:bold;text-decoration:none;padding:12px 26px;border-radius:24px">Choose a new password</a></p>`).join("");
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;color:#1D2125;max-width:520px">
+    <p style="margin:0 0 12px 0">Someone asked to reset the password for your ${esc(biz)} scheduling account.</p>${blocks}
+    <p style="margin:18px 0 0 0;color:#555C62">The link works once and expires in ${RESET_MINUTES} minutes. If you didn’t ask for this, you can ignore this email and your password won’t change.</p></div>`;
+  await mail.sendMail({ to: [to], subject: `Reset your password — ${biz}`, html, bccSelf: false, saveCopy: false });
+}
+app.post("/api/password/forgot", wrap(async (req, res) => {
+  if (!mail.configured()) return res.json({ ok: true, byEmail: false });
+  const id = String(req.body?.identifier || "").trim().toLowerCase().slice(0, 200);
+  if (!id) return res.status(400).json({ error: "Enter your username or email address." });
+  const ipKey = `forgot|${req.ip}`, idKey = `forgot|${id}`;
+  if (throttled(ipKey) || throttled(idKey)) return res.status(429).json({ error: "Too many requests. Wait 15 minutes and try again." });
+  recordFailure(ipKey, 10); recordFailure(idKey, 3);
+  // Same answer whether or not the account exists, and the email is sent after replying,
+  // so the response can't be used to find out who has an account.
+  res.json({ ok: true, byEmail: true });
+  try {
+    const { rows } = await pool.query("SELECT id, username, name, email, role FROM users WHERE (username = $1 OR email = $1) AND email <> ''", [id]);
+    const byAddress = new Map();
+    for (const u of rows.filter(u => ROLES.includes(u.role))) byAddress.set(u.email, [...(byAddress.get(u.email) || []), u]);
+    for (const [to, users] of byAddress) await sendResetEmail(req, users, to);
+  } catch (e) { console.error("Password reset email failed:", e.message); }
+}));
+async function findReset(token) {
+  if (!/^[A-Za-z0-9_-]{40,60}$/.test(String(token || ""))) return null;
+  const { rows } = await pool.query(
+    "SELECT u.id, u.username FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash = $1 AND r.expires_at > now()", [sha256(token)]);
+  return rows[0] || null;
+}
+app.post("/api/password/reset/check", wrap(async (req, res) => {
+  const key = `resetchk|${req.ip}`;
+  if (throttled(key)) return res.status(429).json({ error: "Too many tries. Wait 15 minutes and try again." });
+  const u = await findReset(req.body?.token);
+  if (!u) { recordFailure(key, 20); return res.status(400).json({ error: "This reset link has expired or was already used. Ask for a new one.", code: "bad_token" }); }
+  res.json({ username: u.username });
+}));
+app.post("/api/password/reset", wrap(async (req, res) => {
+  const key = `reset|${req.ip}`;
+  if (throttled(key)) return res.status(429).json({ error: "Too many tries. Wait 15 minutes and try again." });
+  const password = String(req.body?.password || "");
+  if (password.length < 10) return res.status(400).json({ error: "Passwords need at least 10 characters." });
+  const u = await findReset(req.body?.token);
+  if (!u) { recordFailure(key, 20); return res.status(400).json({ error: "This reset link has expired or was already used. Ask for a new one.", code: "bad_token" }); }
+  // New password, sign out every device, and the link can't be used again.
+  await pool.query("UPDATE users SET pass_hash = $1, session_version = session_version + 1 WHERE id = $2", [hashPassword(password), u.id]);
+  await pool.query("DELETE FROM password_resets WHERE user_id = $1", [u.id]);
+  for (const k of [...attempts.keys()]) if (k.startsWith("pw|") && k.endsWith(`|${u.username}`)) attempts.delete(k);
+  res.json({ ok: true, username: u.username });
+}));
+// Each person can set the email address their reset links go to.
+app.put("/api/me/email", auth, wrap(async (req, res) => {
+  const em = cleanEmail(req.body?.email);
+  if (em.error) return res.status(400).json({ error: em.error });
+  await pool.query("UPDATE users SET email = $1 WHERE id = $2", [em.email, req.user.id]);
+  res.json({ email: em.email });
+}));
 
 app.get("/api/me", auth, wrap(async (req, res) => {
   const s = req.settings;
@@ -890,7 +985,7 @@ app.post("/api/import/commit", auth, workers, wrap(async (req, res) => {
 async function ownerCount() { return (await pool.query("SELECT count(*)::int AS n FROM users WHERE role = 'owner'")).rows[0].n; }
 
 app.get("/api/users", auth, allow("owner"), wrap(async (req, res) => {
-  const { rows } = await pool.query("SELECT id, username, name, role, totp_enabled FROM users ORDER BY username");
+  const { rows } = await pool.query("SELECT id, username, name, email, role, totp_enabled FROM users ORDER BY username");
   res.json({ users: rows.map(publicUser) });
 }));
 app.post("/api/users", auth, allow("owner"), wrap(async (req, res) => {
@@ -898,10 +993,12 @@ app.post("/api/users", auth, allow("owner"), wrap(async (req, res) => {
   const err = validateNewUser(username, password);
   if (err) return res.status(400).json({ error: err });
   if (!ROLES.includes(role)) return res.status(400).json({ error: "Choose what this person can do." });
+  const em = cleanEmail(req.body?.email);
+  if (em.error) return res.status(400).json({ error: em.error });
   try {
     const { rows } = await pool.query(
-      `INSERT INTO users (username, name, pass_hash, role) VALUES ($1, $2, $3, $4) RETURNING ${USER_COLS}`,
-      [username.trim().toLowerCase(), String(name || "").trim(), hashPassword(password), role]);
+      `INSERT INTO users (username, name, email, pass_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING ${USER_COLS}`,
+      [username.trim().toLowerCase(), String(name || "").trim(), em.email, hashPassword(password), role]);
     res.json({ user: publicUser(rows[0]) });
   } catch (e) {
     if (e.code === "23505") return res.status(409).json({ error: "That username is taken." });
@@ -919,6 +1016,11 @@ app.patch("/api/users/:id", auth, allow("owner"), wrap(async (req, res) => {
     await pool.query("UPDATE users SET role = $1, session_version = session_version + (CASE WHEN role <> $1 THEN 1 ELSE 0 END) WHERE id = $2", [role, id]);
   }
   if (name !== undefined) await pool.query("UPDATE users SET name = $1 WHERE id = $2", [String(name).trim().slice(0, 60), id]);
+  if (req.body?.email !== undefined) {
+    const em = cleanEmail(req.body.email);
+    if (em.error) return res.status(400).json({ error: em.error });
+    await pool.query("UPDATE users SET email = $1 WHERE id = $2", [em.email, id]);
+  }
   res.json({ ok: true });
 }));
 app.post("/api/users/:id/reset-2fa", auth, allow("owner"), wrap(async (req, res) => {

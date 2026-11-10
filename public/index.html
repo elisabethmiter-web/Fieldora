@@ -317,6 +317,7 @@ dialog .dlg-foot{position:sticky;bottom:0;background:var(--surface);z-index:2}
 .pw-toggle svg{width:20px;height:20px}
 .brand{min-width:0;flex:1}
 .brand img{height:34px;max-width:140px;object-fit:contain;background:#fff;border-radius:6px;padding:2px 4px;align-self:center}
+.forgot-row{margin:-6px 0 4px;grid-column:1/-1}.linkbtn{background:none;border:0;padding:4px 0;color:#0E7490;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer;min-height:0}.linkbtn:hover{color:#0b5d73}
 .brand b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
 @media (max-width:560px){.brand img:not([hidden]) ~ b,.brand img:not([hidden]) ~ small{display:none}.brand img{height:38px;max-width:150px}}
 .ind-types{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr);gap:6px 10px;align-items:center}
@@ -563,13 +564,18 @@ body:not(.role-owner) .owner-only{display:none !important}
       <div class="field full setup-only" hidden><label for="aInd">Your trade</label><select id="aInd"></select><span class="hint">Sets up job types, equipment details and service forms for your trade. You can change everything later.</span></div>
       <div class="field full setup-only" hidden><label for="aTown">Home base town</label><input id="aTown" placeholder="Where trips start, e.g. Goderich, ON"></div>
       <div class="field full" id="aNameWrap" hidden><label for="aName">Your name</label><input id="aName" autocomplete="name"></div>
+      <div class="field full setup-only" hidden><label for="aEmail">Your email</label><input id="aEmail" type="email" autocomplete="email" autocapitalize="none"><span class="hint">Used to send you a link if you ever forget your password.</span></div>
       <div class="field full" id="aUserWrap"><label for="aUser">Username</label><input id="aUser" autocomplete="username" autocapitalize="none"></div>
       <div class="field full" id="aPassWrap"><label for="aPass">Password</label><input id="aPass" type="password" autocomplete="current-password"><span class="hint">At least 10 characters.</span></div>
+      <p class="forgot-row" id="aForgotRow" hidden><button type="button" class="linkbtn" id="aForgot">Forgot password?</button></p>
       <div class="field full" id="aCodeWrap" hidden>
         <label for="aCode">6-digit code from your authenticator app</label>
         <input id="aCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456">
         <span class="hint">Lost your phone? Enter one of your recovery codes instead (like 3f9a2-c81d4).</span>
       </div>
+      <div class="field full" id="aIdWrap" hidden><label for="aId">Username or email</label><input id="aId" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+      <div class="field full" id="aNewWrap" hidden><label for="aNew">New password</label><input id="aNew" type="password" autocomplete="new-password"><span class="hint">At least 10 characters.</span></div>
+      <div class="field full" id="aNew2Wrap" hidden><label for="aNew2">Type it again</label><input id="aNew2" type="password" autocomplete="new-password"></div>
       <p class="err" id="aError" role="alert"></p>
     </div>
     <div class="dlg-foot"><button type="button" class="btn ghost" id="aBack" hidden>Back</button><span class="spacer"></span><button type="submit" class="btn primary" id="aSubmit">Sign in</button></div>
@@ -595,6 +601,16 @@ body:not(.role-owner) .owner-only{display:none !important}
   </section>
 
   <section class="acct-sec not-forced">
+    <h3>Your email</h3>
+    <form id="meEmailForm">
+      <div class="field"><label for="meEmail">Email address</label><input id="meEmail" type="email" autocomplete="email" autocapitalize="none"></div>
+      <div class="field"><button type="submit" class="btn primary">Save email</button></div>
+      <p class="hint full" id="meEmailHint" style="grid-column:1/-1;margin:0"></p>
+      <p class="err" id="meEmailErr" role="alert"></p>
+    </form>
+  </section>
+
+  <section class="acct-sec not-forced">
     <h3>Change your password</h3>
     <form id="pwForm">
       <div class="field"><label for="pCur">Current password</label><input id="pCur" type="password" required autocomplete="current-password"></div>
@@ -610,6 +626,7 @@ body:not(.role-owner) .owner-only{display:none !important}
     <form id="addUserForm">
       <div class="field"><label for="tName">Name</label><input id="tName" required></div>
       <div class="field"><label for="tUser">Username</label><input id="tUser" required autocapitalize="none" autocomplete="off"></div>
+      <div class="field"><label for="tEmail">Email <span class="hint">(optional, for password resets)</span></label><input id="tEmail" type="email" autocapitalize="none" autocomplete="off"></div>
       <div class="field"><label for="tPass">Temporary password</label><input id="tPass" type="password" required autocomplete="new-password"></div>
       <div class="field"><label for="tRole">Access</label>
         <select id="tRole"><option value="staff">Staff — full scheduling</option><option value="owner">Owner — everything</option></select></div>

@@ -39,3 +39,6 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Optional: only needed if you use your own web address. Password reset links use it.
+      - key: APP_URL
+        sync: false

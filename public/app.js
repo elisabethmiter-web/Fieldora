@@ -145,24 +145,42 @@ function applyRole(){
 
 /* ================= sign in ================= */
 const authDlg = $("#authDlg");
-let needsSetup = false;
+let needsSetup = false, resetByEmail = false, authMode = "password", resetToken = null, resetUser = "";
 function authStep(step){
-  const code = step === "code";
-  $("#aUserWrap").hidden = code; $("#aPassWrap").hidden = code;
-  $("#aNameWrap").hidden = code || !needsSetup;
-  document.querySelectorAll("#authDlg .setup-only").forEach(el=>el.hidden = code || !needsSetup);
-  $("#aCodeWrap").hidden = !code; $("#aBack").hidden = !code;
-  $("#authTitle").textContent = code ? "Enter your code" : (needsSetup ? "Set up Fielora" : "Sign in");
-  $("#authIntro").textContent = code ? "Open your authenticator app and enter the 6-digit code for this app." : (needsSetup ? "Create the first account. You can add the rest of the team after." : "Sign in to see the schedule.");
-  $("#aSubmit").textContent = code ? "Verify" : (needsSetup ? "Create account" : "Sign in");
-  $("#aUser").required = !code; $("#aPass").required = !code; $("#aCode").required = code;
+  authMode = step;
+  const is = x => step === x, signin = is("password");
+  $("#aUserWrap").hidden = !signin; $("#aPassWrap").hidden = !signin;
+  $("#aNameWrap").hidden = !(signin && needsSetup);
+  document.querySelectorAll("#authDlg .setup-only").forEach(el=>el.hidden = !(signin && needsSetup));
+  $("#aForgotRow").hidden = !(signin && !needsSetup);
+  $("#aCodeWrap").hidden = !is("code");
+  $("#aIdWrap").hidden = !is("forgot");
+  $("#aNewWrap").hidden = $("#aNew2Wrap").hidden = !is("reset");
+  $("#aBack").hidden = !(is("code") || is("forgot") || is("badlink"));
+  $("#aBack").textContent = is("code") ? "Back" : "Back to sign in";
+  $("#authTitle").textContent = { password: needsSetup ? "Set up Fielora" : "Sign in", code:"Enter your code", forgot:"Forgot your password?", sent:"Check your email", reset:"Choose a new password", done:"Password changed", badlink:"Reset link expired" }[step];
+  $("#authIntro").textContent = {
+    password: needsSetup ? "Create the first account. You can add the rest of the team after." : "Sign in to see the schedule.",
+    code: "Open your authenticator app and enter the 6-digit code for this app.",
+    forgot: resetByEmail ? "Enter your username or the email address on your account, and we’ll email you a link to choose a new password." : "Password reset emails aren’t set up for this business yet. Ask the owner to reset your password from Account → Team.",
+    sent: "If that account has an email address on file, a reset link is on its way. It works once and expires in 1 hour. If it doesn’t arrive in a few minutes, check your junk folder, or ask the owner to reset your password.",
+    reset: `Choose a new password for ${resetUser}.`,
+    done: "Your password is changed, and any other devices were signed out. Sign in with your new password.",
+    badlink: "This reset link has expired or was already used. You can ask for a new one."
+  }[step];
+  $("#aSubmit").textContent = { password: needsSetup ? "Create account" : "Sign in", code:"Verify", forgot: resetByEmail ? "Email me a reset link" : "Back to sign in", sent:"Back to sign in", reset:"Save new password", done:"Sign in", badlink:"Ask for a new link" }[step];
+  $("#aUser").required = $("#aPass").required = signin; $("#aCode").required = is("code"); $("#aId").required = is("forgot") && resetByEmail;
+  $("#aNew").required = $("#aNew2").required = is("reset");
   $("#aError").textContent = "";
-  setTimeout(()=> (code ? $("#aCode") : $("#aUser")).focus(), 30);
+  const focus = { password: $("#aUser").value ? $("#aPass") : $("#aUser"), code: $("#aCode"), forgot: $("#aId"), reset: $("#aNew") }[step] || $("#aSubmit");
+  setTimeout(()=> focus.focus(), 30);
 }
 async function showAuth(){
-  state.user = null; state.ticket = null; applyRole();
+  state.user = null; applyRole();
+  if(authDlg.open) return;   // already showing: don't wipe what someone is typing (code, reset, etc.)
+  state.ticket = null;
   try{
-    const st = await api("GET","/api/setup"); needsSetup = st.needsSetup;
+    const st = await api("GET","/api/setup"); needsSetup = st.needsSetup; resetByEmail = !!st.resetByEmail;
     if(st.presets) $("#aInd").innerHTML = st.presets.map(p=>`<option value="${p.id}"${p.id==="general"?" selected":""}>${esc(p.name)}</option>`).join("");
   }catch(e){ needsSetup = false; }
   $("#aPass").autocomplete = needsSetup ? "new-password" : "current-password";
@@ -171,16 +189,37 @@ async function showAuth(){
 }
 authDlg.addEventListener("cancel", e=>e.preventDefault());
 $("#aBack").addEventListener("click", ()=>{ state.ticket = null; $("#aCode").value = ""; authStep("password"); });
+$("#aForgot").addEventListener("click", ()=>{ $("#aId").value = $("#aUser").value; authStep("forgot"); });
+async function startReset(token){
+  resetToken = token;
+  try{ const st = await api("GET","/api/setup"); needsSetup = st.needsSetup; resetByEmail = !!st.resetByEmail; }catch(e){}
+  if(!authDlg.open) authDlg.showModal();
+  try{ const d = await api("POST","/api/password/reset/check",{ token }); resetUser = d.username; authStep("reset"); }
+  catch(err){ resetToken = null; authStep("badlink"); if(err.code !== "bad_token") $("#aError").textContent = err.error; }
+}
 $("#authForm").addEventListener("submit", async e=>{
   e.preventDefault();
   $("#aSubmit").disabled = true; $("#aError").textContent = "";
   try{
+    if(authMode === "forgot"){
+      if(!resetByEmail){ authStep("password"); return; }
+      await api("POST","/api/password/forgot",{ identifier:$("#aId").value }); authStep("sent"); return;
+    }
+    if(authMode === "sent" || authMode === "done"){ authStep("password"); return; }
+    if(authMode === "badlink"){ authStep("forgot"); return; }
+    if(authMode === "reset"){
+      if($("#aNew").value !== $("#aNew2").value){ $("#aError").textContent = "The two passwords don’t match."; return; }
+      try{ const r = await api("POST","/api/password/reset",{ token:resetToken, password:$("#aNew").value });
+        resetToken = null; $("#aNew").value = $("#aNew2").value = ""; $("#aUser").value = r.username; $("#aPass").value = ""; authStep("done"); }
+      catch(err){ if(err.code === "bad_token"){ resetToken = null; authStep("badlink"); } else $("#aError").textContent = err.error; }
+      return;
+    }
     let d;
     if(state.ticket){
       d = await api("POST","/api/login/2fa",{ ticket:state.ticket, code:$("#aCode").value });
       if(typeof d.recoveryLeft === "number" && d.recoveryLeft < 3 && !/^\d{6}$/.test($("#aCode").value.trim())) setTimeout(()=>toast(`You have ${d.recoveryLeft} recovery codes left. Set up two-step login again to get new ones.`), 800);
     } else {
-      d = await api("POST", needsSetup ? "/api/setup" : "/api/login", { username:$("#aUser").value, password:$("#aPass").value, name:$("#aName").value, businessName:$("#aBiz").value, industry:$("#aInd").value, homeTown:$("#aTown").value });
+      d = await api("POST", needsSetup ? "/api/setup" : "/api/login", { username:$("#aUser").value, password:$("#aPass").value, name:$("#aName").value, email:$("#aEmail").value, businessName:$("#aBiz").value, industry:$("#aInd").value, homeTown:$("#aTown").value });
       if(d.needs2fa){ state.ticket = d.ticket; $("#aCode").value = ""; authStep("code"); return; }
     }
     state.ticket = null; $("#aPass").value = ""; $("#aCode").value = "";
@@ -202,7 +241,11 @@ function openAccount(isForced=false){
   acctDlg.classList.toggle("forced", forced);
   $("#forcedNote").hidden = !forced;
   tfaStage = "idle"; renderTfa(); renderInstallUI();
-  $("#pError").textContent = ""; $("#tError").textContent = ""; $("#bError").textContent = "";
+  $("#pError").textContent = ""; $("#tError").textContent = ""; $("#bError").textContent = ""; $("#meEmailErr").textContent = "";
+  $("#meEmail").value = state.user?.email || "";
+  $("#meEmailHint").textContent = state.mail?.configured
+    ? "If you forget your password, a reset link is sent to this address."
+    : "Add your email now. Reset links start working once the business connects Outlook. Until then, an owner can reset your password from the Team list.";
   if(!forced){
     if(isOwner()){ loadTeam(); fillBiz(); renderLogo(); renderTradeForm(state.industry); }
     $("#mailStatus").innerHTML = state.mail?.configured
@@ -261,6 +304,11 @@ function renderTfa(data){
     };
   }
 }
+$("#meEmailForm").addEventListener("submit", async e=>{
+  e.preventDefault(); $("#meEmailErr").textContent = "";
+  try{ const r = await api("PUT","/api/me/email",{ email:$("#meEmail").value }); state.user.email = r.email; toast(r.email ? "Email saved" : "Email removed"); }
+  catch(err){ $("#meEmailErr").textContent = err.error; }
+});
 $("#pwForm").addEventListener("submit", async e=>{
   e.preventDefault(); $("#pError").textContent = "";
   try{ await api("POST","/api/password",{ current:$("#pCur").value, next:$("#pNew").value }); e.target.reset(); toast("Password changed. Other devices were signed out."); }
@@ -272,9 +320,10 @@ async function loadTeam(){
     const { users } = await api("GET","/api/users");
     $("#teamList").innerHTML = users.map(u=>{
       const me = u.id === state.user.id;
-      return `<div class="team-row"><div><b>${esc(u.name||u.username)}</b> ${me?`<span class="role-pill">You</span>`:""}<div class="hint">${esc(u.username)} · two-step login ${u.totpEnabled?"on":"off"}</div></div>
+      return `<div class="team-row"><div><b>${esc(u.name||u.username)}</b> ${me?`<span class="role-pill">You</span>`:""}<div class="hint">${esc(u.username)}${u.email ? " · "+esc(u.email) : " · <i>no email</i>"} · two-step login ${u.totpEnabled?"on":"off"}</div></div>
       <div class="acts">${me ? `<span class="role-pill">${ROLE_LABEL[u.role]}</span>` : `<select data-role="${u.id}" aria-label="Access for ${esc(u.username)}">${ROLE_LABEL[u.role] ? "" : `<option value="" selected disabled>No access — choose a role</option>`}${Object.entries(ROLE_LABEL).map(([k,v])=>`<option value="${k}"${u.role===k?" selected":""}>${v}</option>`).join("")}</select>
         ${u.totpEnabled?`<button type="button" class="btn ghost" data-reset2fa="${u.id}" data-uname="${esc(u.username)}">Reset two-step</button>`:""}
+        <button type="button" class="btn ghost" data-email="${u.id}" data-uname="${esc(u.username)}" data-cur="${esc(u.email||"")}">Email</button>
         <button type="button" class="btn ghost" data-resetpw="${u.id}" data-uname="${esc(u.username)}">Reset password</button>
         <button type="button" class="btn danger" data-rmuser="${u.id}" data-uname="${esc(u.username)}">Remove</button>`}</div></div>`;
     }).join("");
@@ -288,7 +337,8 @@ $("#teamList").addEventListener("change", async e=>{
 $("#teamList").addEventListener("click", async e=>{
   const b = e.target.closest("button"); if(!b) return; const d = b.dataset;
   try{
-    if(d.rmuser){ if(!confirm(`Remove ${d.uname}? They won’t be able to sign in.`)) return; await api("DELETE", `/api/users/${d.rmuser}`); toast("Removed"); }
+    if(d.email){ const v = prompt(`Email address for ${d.uname} (used for password reset links). Leave blank to remove:`, d.cur || ""); if(v === null) return; await api("PATCH", `/api/users/${d.email}`, { email:v }); toast("Email saved"); }
+    else if(d.rmuser){ if(!confirm(`Remove ${d.uname}? They won’t be able to sign in.`)) return; await api("DELETE", `/api/users/${d.rmuser}`); toast("Removed"); }
     else if(d.reset2fa){ if(!confirm(`Reset two-step login for ${d.uname}? Use this if they lost their phone. They’ll be signed out and can set it up again.`)) return; await api("POST", `/api/users/${d.reset2fa}/reset-2fa`); toast("Two-step login reset"); }
     else if(d.resetpw){ const pw = prompt(`New temporary password for ${d.uname} (at least 10 characters):`); if(!pw) return; await api("POST", `/api/users/${d.resetpw}/reset-password`, { password:pw }); toast("Password reset. Give them the new password."); }
     else return;
@@ -298,7 +348,7 @@ $("#teamList").addEventListener("click", async e=>{
 $("#addUserForm").addEventListener("submit", async e=>{
   e.preventDefault(); $("#tError").textContent = "";
   try{
-    await api("POST","/api/users",{ name:$("#tName").value, username:$("#tUser").value, password:$("#tPass").value, role:$("#tRole").value });
+    await api("POST","/api/users",{ name:$("#tName").value, username:$("#tUser").value, email:$("#tEmail").value, password:$("#tPass").value, role:$("#tRole").value });
     e.target.reset(); toast("Person added. Give them their username and temporary password."); loadTeam();
   }catch(err){ $("#tError").textContent = err.error; }
 });
@@ -1534,6 +1584,8 @@ enhancePasswords();
 /* ================= start ================= */
 (async function init(){
   render();
+  const rt = new URLSearchParams(location.search).get("reset");
+  if(rt){ history.replaceState(null, "", location.pathname + location.hash); await startReset(rt); }   // keep the token out of history
   try{ if(await loadMe()) await refresh(); }
   catch(e){ if(e.status !== 401 && e.code !== "2fa_required") setStatus(); }
   { const h = location.hash.slice(1); if(VIEWS.includes(h)) showView(h); }
