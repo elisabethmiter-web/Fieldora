@@ -83,6 +83,8 @@ function toast(msg){ const el = $("#toast"); el.textContent = msg; el.classList.
 /* ================= state + server ================= */
 const state = { customers:{}, jobs:{}, weekStart: mondayOf(new Date()), user:null, settings:null, mail:{configured:false}, online:true, ticket:null };
 const isOwner = () => state.user?.role === "owner";
+const isMgr = () => ["owner","manager"].includes(state.user?.role);   // managers and owners
+const isStaff = () => state.user?.role === "staff";
 
 async function api(method, url, body){
   const opts = { method, headers:{ "X-Requested-With":"fielora" }, credentials:"same-origin" };
@@ -94,6 +96,7 @@ async function api(method, url, body){
   let data = {}; try{ data = await res.json(); }catch(e){}
   if(res.status === 401 && !["/api/login","/api/login/2fa","/api/password","/api/2fa/disable"].includes(url)) showAuth();
   if(res.status === 403 && data.code === "2fa_required") openAccount(true);
+  if(res.status === 403 && data.code === "password_change_required") openMustChange();
   if(!res.ok) throw { status:res.status, error: data.error || "Something went wrong. Try again.", code:data.code };
   return data;
 }
@@ -119,7 +122,7 @@ async function refresh(){
     const d = await api("GET", "/api/data");
     if(pendingWrites) return;
     state.customers = d.customers || {}; state.jobs = d.jobs || {};
-    fillTowns(); render();
+    fillTowns(); render(); showNotice(d.notice); setRequestDot(d.passwordRequests); fireHook("render", state); $("#helpDot").hidden = !d.supportUnread;
   }catch(e){ setStatus(); }
 }
 function setStatus(){
@@ -131,13 +134,147 @@ function setStatus(){
 async function loadMe(){
   const me = await api("GET","/api/me");
   state.user = me.user; state.settings = me.settings; state.mail = me.mail; state.mapTiles = me.mapTiles; state.sharepoint = me.sharepoint; state.forms = me.forms; state.branding = me.branding; state.industry = me.industry; state.presets = me.presets;
-  applyRole(); applyIndustry();
+  state.custom = me.custom || null; applyRole(); applyIndustry(); applyCustom(); showNotice(me.notice); setRequestDot(me.passwordRequests);
+  if(me.user.mustChangePassword){ openMustChange(); return false; } $("#helpBtn").hidden = !me.supportChat;
   if(me.needs2faSetup){ openAccount(true); return false; }
   return true;
 }
+/* ---------- per-business customizations (set from Fielora Admin) ---------- */
+const DEFAULT_LABELS = { schedule:"Schedule", map:"Map", due:"Maintenance due", customers:"Customers", customer:"Customer", jobs:"Jobs", job:"Job", newJob:"New job" };
+const lbl = k => state.custom?.labels?.[k] || DEFAULT_LABELS[k];   // (not "L": that's the map library)
+const lower = t => t.charAt(0).toLowerCase() + t.slice(1);
+const region = () => state.custom?.region || "Ontario";
+const featureOn = k => state.custom?.features?.[k] !== false;
+function applyCustom(){
+  const c = state.custom || {};
+  for(const k of ["map","due","shop","import","help"]) document.body.classList.toggle("off-"+k, !featureOn(k));
+  if(!featureOn("help")) $("#helpBtn").hidden = true;
+  if(["map","due","shop"].some(k=>!featureOn(k) && currentView()===k)) showView("schedule");
+  document.querySelectorAll("[data-l]").forEach(el=>{ el.textContent = lbl(el.dataset.l); });
+  $("#newCustBtn").textContent = `Add ${lower(lbl("customer"))}`;
+  if(isStaff()) $("#newJobBtn").textContent = "Personal time";
+  $("#custSearch").setAttribute("aria-label", `Search ${lower(lbl("customers"))}`);
+  // brand colour: swap the yellow, and pick black or white text that stays readable on it
+  const root = document.documentElement.style;
+  if(c.accent){
+    const n = parseInt(c.accent.slice(1),16), lum = (0.299*(n>>16) + 0.587*((n>>8)&255) + 0.114*(n&255))/255;
+    root.setProperty("--yellow", c.accent); root.setProperty("--yellow-ink", lum > 0.6 ? "#1D2125" : "#FFFFFF");
+  } else { root.removeProperty("--yellow"); root.removeProperty("--yellow-ink"); }
+  $("#customCss").textContent = c.css || "";
+  fireHook("customized", c);
+}
+// Builds the extra inputs for this business's own fields (job or customer window).
+function renderCustomFields(kind, values){
+  const fields = (kind === "job" ? state.custom?.jobFields : state.custom?.customerFields) || [];
+  const box = $(kind === "job" ? "#jCustom" : "#cCustom"), grid = $(kind === "job" ? "#jCustomGrid" : "#cCustomGrid");
+  box.hidden = !fields.length;
+  grid.innerHTML = fields.map(f=>{
+    const id = `cf_${kind}_${f.id}`, v = values?.[f.id] ?? "";
+    const input = f.type === "textarea" ? `<textarea id="${id}" data-cf="${f.id}">${esc(v)}</textarea>`
+      : f.type === "select" ? `<select id="${id}" data-cf="${f.id}"><option value=""></option>${f.options.map(o=>`<option${o===v?" selected":""}>${esc(o)}</option>`).join("")}</select>`
+      : f.type === "yesno" ? `<select id="${id}" data-cf="${f.id}"><option value=""></option><option${v==="Yes"?" selected":""}>Yes</option><option${v==="No"?" selected":""}>No</option></select>`
+      : `<input id="${id}" data-cf="${f.id}" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}"${f.type === "number" ? ' step="any"' : ""} value="${esc(v)}">`;
+    return `<div class="${f.type === "textarea" ? "cf-full" : ""}"><label for="${id}">${esc(f.label)}</label>${input}</div>`;
+  }).join("");
+}
+function readCustomFields(kind, prev){
+  const out = { ...(prev || {}) };
+  $(kind === "job" ? "#jCustomGrid" : "#cCustomGrid").querySelectorAll("[data-cf]").forEach(el=>{ const v = el.value.trim(); if(v === "") delete out[el.dataset.cf]; else out[el.dataset.cf] = v; });
+  return out;
+}
+// Small hook system for per-customer code in custom/<name>/client.js (see custom/README.md).
+const hooks = {};
+function fireHook(name, ...args){ (hooks[name] || []).forEach(fn=>{ try{ fn(...args); }catch(e){ console.error("Custom code error in", name, e); } }); }
+window.Fielora = Object.freeze({
+  on(name, fn){ (hooks[name] ||= []).push(fn); if(name === "ready" && state.user) try{ fn(state); }catch(e){ console.error(e); } },
+  api: (method, url, body) => api(method, url, body),
+  toast: m => toast(m),
+  get state(){ return state; },
+  esc: t => esc(t),
+  openJob: id => openJob(id), openCustomer: id => openCust(id),
+  label: k => lbl(k),
+});
+function setRequestDot(n){ $("#acctBtn").classList.toggle("acct-btn-dot", !!n); $("#acctBtn").title = n ? `${n} password request${n===1?"":"s"} waiting` : ""; }
+function openMustChange(){ const d = $("#mustDlg"); if(d.open) return; $("#mustForm").reset(); $("#mErr").textContent = ""; d.showModal(); setTimeout(()=>$("#mCur").focus(), 30); }
+$("#mustDlg").addEventListener("cancel", e=>e.preventDefault());
+$("#mustForm").addEventListener("submit", async e=>{
+  e.preventDefault(); $("#mErr").textContent = "";
+  if($("#mNew").value !== $("#mNew2").value){ $("#mErr").textContent = "The two new passwords don’t match."; return; }
+  try{
+    await api("POST","/api/password",{ current:$("#mCur").value, next:$("#mNew").value });
+    $("#mustDlg").close(); toast("Password saved. Welcome!");
+    if(await loadMe()){ await refresh(); fireHook("ready", state); }
+  }catch(err){ $("#mErr").textContent = err.error; }
+});
+$("#mLogout").addEventListener("click", async ()=>{ try{ await api("POST","/api/logout"); }catch(e){} $("#mustDlg").close(); state.customers = {}; state.jobs = {}; render(); showAuth(); });
+function showNotice(n){
+  const key = n ? "fielora-notice-" + (n.at || n.text) : "";
+  let hidden = false; try{ hidden = !!key && localStorage.getItem("fielora-notice-hidden") === key; }catch(e){}
+  $("#noticeBar").hidden = !n || hidden;
+  if(n){ $("#noticeText").textContent = n.text; $("#noticeBar").classList.toggle("warning", n.level === "warning"); $("#noticeBar").dataset.key = key; }
+}
+$("#noticeClose").addEventListener("click", ()=>{ try{ localStorage.setItem("fielora-notice-hidden", $("#noticeBar").dataset.key); }catch(e){} $("#noticeBar").hidden = true; });
+/* ---------- help chat ---------- */
+const chat = { data:null, busy:false, poll:null };
+// Escape first, then turn **bold** into bold. Nothing else from a message becomes HTML.
+const richText = t => esc(t).replace(/\*\*([^*\n]{1,120})\*\*/g, "<b>$1</b>");
+const SUGGEST = ["How do I plan a trip on the map?", "How do I add my logo to reports?", "How do I send a service report?", "How do I add someone to my team?"];
+function renderChat(){
+  const d = chat.data || {}; const msgs = d.messages || [];
+  const human = d.mode === "human";
+  $("#chatStatus").textContent = !d.aiAvailable ? `Messages go to the ${d.supportName || "support"} team. They’ll reply here.`
+    : human ? (d.peopleAvailable ? `The ${d.supportName} team is handling this chat. They’ll reply here, usually during business hours.` : "")
+    : `The Fielora assistant answers right away.${d.peopleAvailable ? " A person can step in any time." : ""}`;
+  $("#chatStatus").hidden = !$("#chatStatus").textContent;
+  const label = m => m.sender === "user" ? "You" : m.sender === "ai" ? "Fielora assistant" : `${m.name} · ${d.supportName || "Support"}`;
+  $("#chatLog").innerHTML = (msgs.length ? "" : `<div class="msg ai"><span class="who">Fielora assistant</span>Hi ${esc(state.user?.name || "")}! Ask me how to do anything in Fielora.${d.peopleAvailable ? " If you need a person, tap “Talk to a person”." : ""}</div>`)
+    + msgs.map(m => m.sender === "system" ? `<div class="msg system">${esc(m.body)}</div>` : `<div class="msg ${m.sender}"><span class="who">${esc(label(m))}</span>${richText(m.body)}</div>`).join("")
+    + (chat.busy ? `<div class="msg ai typing"><span class="who">Fielora assistant</span>Thinking…</div>` : "");
+  $("#chatSuggest").innerHTML = !msgs.length && d.aiAvailable ? SUGGEST.map(q => `<button type="button">${esc(q)}</button>`).join("") : "";
+  $("#chatHuman").hidden = human || !d.peopleAvailable; $("#chatEnd").hidden = !d.thread;
+  $("#chatPrivacy").textContent = `Chats are saved in your Fielora app${d.peopleAvailable ? ` and can be read by the ${d.supportName} team` : ""}.${d.aiAvailable ? " The assistant uses Anthropic’s Claude AI to answer." : ""} Never share passwords or codes here.`;
+  $("#chatSend").disabled = chat.busy;
+  const log = $("#chatLog"); log.scrollTop = log.scrollHeight;
+}
+async function loadChat(quiet){
+  try{ const d = await api("GET","/api/support/chat"); const changed = JSON.stringify(d.messages) !== JSON.stringify(chat.data?.messages); chat.data = d; if(changed || !quiet) renderChat(); $("#helpDot").hidden = true; }
+  catch(e){ if(!quiet){ $("#chatLog").innerHTML = `<div class="msg system">${esc(e.error)}</div>`; } }
+}
+async function sendChat(text){
+  text = text.trim(); if(!text || chat.busy) return;
+  chat.busy = true;
+  chat.data = { ...(chat.data||{}), messages:[...(chat.data?.messages||[]), { sender:"user", name:"", body:text, at:new Date().toISOString() }] };
+  $("#chatInput").value = ""; renderChat();
+  try{ chat.data = await api("POST","/api/support/chat/messages",{ body:text }); }
+  catch(e){ chat.data.messages.push({ sender:"system", body:e.error }); }
+  finally{ chat.busy = false; renderChat(); $("#chatInput").focus(); }
+}
+$("#helpBtn").addEventListener("click", async ()=>{
+  $("#chatDlg").showModal(); renderChat(); await loadChat();
+  clearInterval(chat.poll); chat.poll = setInterval(()=>{ if(!chat.busy) loadChat(true); }, 5000);
+  setTimeout(()=>$("#chatInput").focus(), 50);
+});
+$("#chatClose").addEventListener("click", ()=>$("#chatDlg").close());
+$("#chatDlg").addEventListener("close", ()=>clearInterval(chat.poll));
+$("#chatForm").addEventListener("submit", e=>{ e.preventDefault(); sendChat($("#chatInput").value); });
+$("#chatInput").addEventListener("keydown", e=>{ if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); sendChat($("#chatInput").value); } });
+$("#chatSuggest").addEventListener("click", e=>{ const b = e.target.closest("button"); if(b) sendChat(b.textContent); });
+$("#chatHuman").addEventListener("click", async ()=>{ try{ chat.data = await api("POST","/api/support/chat/human"); renderChat(); }catch(e){ toast(e.error); } });
+$("#chatEnd").addEventListener("click", async ()=>{ if(!confirm("End this chat? You can start a new one any time.")) return; try{ chat.data = await api("POST","/api/support/chat/close"); renderChat(); }catch(e){ toast(e.error); } });
+
+async function loadSupport(){
+  try{
+    const d = await api("GET","/api/support-log");
+    const when = t => new Date(t).toLocaleString(undefined, { dateStyle:"medium", timeStyle:"short" });
+    $("#supportBody").innerHTML = (d.enabled
+      ? `<p class="hint" style="margin:0">Support access is <b>on</b>. Your IT provider can help with account recovery, backups and notices. Everything they do is listed here.</p>`
+      : `<p class="hint" style="margin:0">Support access is <b>off</b>. Your IT provider can’t access this app from their dashboard.</p>`)
+      + (d.log.length ? `<ul class="support-log">${d.log.map(l=>`<li><b>${esc(l.action)}</b>${l.detail ? " — "+esc(l.detail) : ""}<div class="hint">${esc(l.admin)} · ${esc(when(l.at))}</div></li>`).join("")}</ul>` : (d.enabled ? `<p class="hint">No support activity yet.</p>` : ""));
+  }catch(e){ $("#supportBody").innerHTML = `<p class="hint">${esc(e.error)}</p>`; }
+}
 function applyRole(){
   const r = state.user?.role || "none";
-  document.body.classList.remove("role-owner","role-staff");
+  document.body.classList.remove("role-owner","role-manager","role-staff");
   document.body.classList.add("role-"+r);
   setStatus();
   if(typeof renderInstallUI === "function") renderInstallUI();
@@ -145,7 +282,7 @@ function applyRole(){
 
 /* ================= sign in ================= */
 const authDlg = $("#authDlg");
-let needsSetup = false, resetByEmail = false, authMode = "password", resetToken = null, resetUser = "";
+let needsSetup = false, authMode = "password", supportOn = false;
 function authStep(step){
   authMode = step;
   const is = x => step === x, signin = is("password");
@@ -155,24 +292,19 @@ function authStep(step){
   $("#aForgotRow").hidden = !(signin && !needsSetup);
   $("#aCodeWrap").hidden = !is("code");
   $("#aIdWrap").hidden = !is("forgot");
-  $("#aNewWrap").hidden = $("#aNew2Wrap").hidden = !is("reset");
-  $("#aBack").hidden = !(is("code") || is("forgot") || is("badlink"));
+  $("#aBack").hidden = !(is("code") || is("forgot"));
   $("#aBack").textContent = is("code") ? "Back" : "Back to sign in";
-  $("#authTitle").textContent = { password: needsSetup ? "Set up Fielora" : "Sign in", code:"Enter your code", forgot:"Forgot your password?", sent:"Check your email", reset:"Choose a new password", done:"Password changed", badlink:"Reset link expired" }[step];
+  $("#authTitle").textContent = { password: needsSetup ? "Set up Fielora" : "Sign in", code:"Enter your code", forgot:"Forgot your password?", sent:"Request sent" }[step];
   $("#authIntro").textContent = {
     password: needsSetup ? "Create the first account. You can add the rest of the team after." : "Sign in to see the schedule.",
     code: "Open your authenticator app and enter the 6-digit code for this app.",
-    forgot: resetByEmail ? "Enter your username or the email address on your account, and we’ll email you a link to choose a new password." : "Password reset emails aren’t set up for this business yet. Ask the owner to reset your password from Account → Team.",
-    sent: "If that account has an email address on file, a reset link is on its way. It works once and expires in 1 hour. If it doesn’t arrive in a few minutes, check your junk folder, or ask the owner to reset your password.",
-    reset: `Choose a new password for ${resetUser}.`,
-    done: "Your password is changed, and any other devices were signed out. Sign in with your new password.",
-    badlink: "This reset link has expired or was already used. You can ask for a new one."
+    forgot: "Enter your username. We’ll ask your company’s owner or a manager to set a temporary password for you. You can also just ask them directly.",
+    sent: `Your request has been sent to your company’s owners and managers${supportOn ? ", and to support" : ""}. They’ll give you a temporary password, in person or by phone. When you sign in with it, you’ll choose your own password.`
   }[step];
-  $("#aSubmit").textContent = { password: needsSetup ? "Create account" : "Sign in", code:"Verify", forgot: resetByEmail ? "Email me a reset link" : "Back to sign in", sent:"Back to sign in", reset:"Save new password", done:"Sign in", badlink:"Ask for a new link" }[step];
-  $("#aUser").required = $("#aPass").required = signin; $("#aCode").required = is("code"); $("#aId").required = is("forgot") && resetByEmail;
-  $("#aNew").required = $("#aNew2").required = is("reset");
+  $("#aSubmit").textContent = { password: needsSetup ? "Create account" : "Sign in", code:"Verify", forgot:"Send request", sent:"Back to sign in" }[step];
+  $("#aUser").required = $("#aPass").required = signin; $("#aCode").required = is("code"); $("#aId").required = is("forgot");
   $("#aError").textContent = "";
-  const focus = { password: $("#aUser").value ? $("#aPass") : $("#aUser"), code: $("#aCode"), forgot: $("#aId"), reset: $("#aNew") }[step] || $("#aSubmit");
+  const focus = { password: $("#aUser").value ? $("#aPass") : $("#aUser"), code: $("#aCode"), forgot: $("#aId") }[step] || $("#aSubmit");
   setTimeout(()=> focus.focus(), 30);
 }
 async function showAuth(){
@@ -180,7 +312,7 @@ async function showAuth(){
   if(authDlg.open) return;   // already showing: don't wipe what someone is typing (code, reset, etc.)
   state.ticket = null;
   try{
-    const st = await api("GET","/api/setup"); needsSetup = st.needsSetup; resetByEmail = !!st.resetByEmail;
+    const st = await api("GET","/api/setup"); needsSetup = st.needsSetup;
     if(st.presets) $("#aInd").innerHTML = st.presets.map(p=>`<option value="${p.id}"${p.id==="general"?" selected":""}>${esc(p.name)}</option>`).join("");
   }catch(e){ needsSetup = false; }
   $("#aPass").autocomplete = needsSetup ? "new-password" : "current-password";
@@ -190,30 +322,14 @@ async function showAuth(){
 authDlg.addEventListener("cancel", e=>e.preventDefault());
 $("#aBack").addEventListener("click", ()=>{ state.ticket = null; $("#aCode").value = ""; authStep("password"); });
 $("#aForgot").addEventListener("click", ()=>{ $("#aId").value = $("#aUser").value; authStep("forgot"); });
-async function startReset(token){
-  resetToken = token;
-  try{ const st = await api("GET","/api/setup"); needsSetup = st.needsSetup; resetByEmail = !!st.resetByEmail; }catch(e){}
-  if(!authDlg.open) authDlg.showModal();
-  try{ const d = await api("POST","/api/password/reset/check",{ token }); resetUser = d.username; authStep("reset"); }
-  catch(err){ resetToken = null; authStep("badlink"); if(err.code !== "bad_token") $("#aError").textContent = err.error; }
-}
 $("#authForm").addEventListener("submit", async e=>{
   e.preventDefault();
   $("#aSubmit").disabled = true; $("#aError").textContent = "";
   try{
     if(authMode === "forgot"){
-      if(!resetByEmail){ authStep("password"); return; }
-      await api("POST","/api/password/forgot",{ identifier:$("#aId").value }); authStep("sent"); return;
+      const r = await api("POST","/api/password/request",{ username:$("#aId").value }); supportOn = !!r.support; authStep("sent"); return;
     }
-    if(authMode === "sent" || authMode === "done"){ authStep("password"); return; }
-    if(authMode === "badlink"){ authStep("forgot"); return; }
-    if(authMode === "reset"){
-      if($("#aNew").value !== $("#aNew2").value){ $("#aError").textContent = "The two passwords don’t match."; return; }
-      try{ const r = await api("POST","/api/password/reset",{ token:resetToken, password:$("#aNew").value });
-        resetToken = null; $("#aNew").value = $("#aNew2").value = ""; $("#aUser").value = r.username; $("#aPass").value = ""; authStep("done"); }
-      catch(err){ if(err.code === "bad_token"){ resetToken = null; authStep("badlink"); } else $("#aError").textContent = err.error; }
-      return;
-    }
+    if(authMode === "sent"){ authStep("password"); return; }
     let d;
     if(state.ticket){
       d = await api("POST","/api/login/2fa",{ ticket:state.ticket, code:$("#aCode").value });
@@ -225,7 +341,7 @@ $("#authForm").addEventListener("submit", async e=>{
     state.ticket = null; $("#aPass").value = ""; $("#aCode").value = "";
     setPwVisible($("#aPass"), false);
     authDlg.close();
-    if(await loadMe()) await refresh();
+    if(await loadMe()){ await refresh(); fireHook("ready", state); }
   }catch(err){
     $("#aError").textContent = err.error;
     if(err.code === "ticket_expired"){ state.ticket = null; authStep("password"); $("#aError").textContent = err.error; }
@@ -244,10 +360,11 @@ function openAccount(isForced=false){
   $("#pError").textContent = ""; $("#tError").textContent = ""; $("#bError").textContent = ""; $("#meEmailErr").textContent = "";
   $("#meEmail").value = state.user?.email || "";
   $("#meEmailHint").textContent = state.mail?.configured
-    ? "If you forget your password, a reset link is sent to this address."
-    : "Add your email now. Reset links start working once the business connects Outlook. Until then, an owner can reset your password from the Team list.";
+    ? "Optional. Helps your team and support reach you."
+    : "Optional. Helps your team and support reach you.";
   if(!forced){
-    if(isOwner()){ loadTeam(); fillBiz(); renderLogo(); renderTradeForm(state.industry); }
+    if(isMgr()){ loadTeam(); renderLogo(); $("#tRole").querySelectorAll("option").forEach(o=>{ o.disabled = !isOwner() && o.value !== "staff"; }); if(!isOwner()) $("#tRole").value = "staff"; }
+    if(isOwner()){ fillBiz(); renderTradeForm(state.industry); loadSupport(); }
     $("#mailStatus").innerHTML = state.mail?.configured
       ? `Service reports are emailed through Outlook from <b>${esc(state.mail.from)}</b>. A copy also goes to that mailbox.`
       : "Outlook email isn’t connected yet. Finished reports can still be opened, downloaded, or shared from a phone. The setup steps are in the README.";
@@ -314,18 +431,25 @@ $("#pwForm").addEventListener("submit", async e=>{
   try{ await api("POST","/api/password",{ current:$("#pCur").value, next:$("#pNew").value }); e.target.reset(); toast("Password changed. Other devices were signed out."); }
   catch(err){ $("#pError").textContent = err.error; }
 });
-const ROLE_LABEL = { owner:"Owner", staff:"Staff" };
+const ROLE_LABEL = { owner:"Owner", manager:"Manager", staff:"Staff" };
 async function loadTeam(){
   try{
-    const { users } = await api("GET","/api/users");
+    const { users, requests } = await api("GET","/api/users");
+    const when = t => t ? new Date(t).toLocaleString(undefined, { dateStyle:"medium", timeStyle:"short" }) : "";
+    $("#pwRequests").innerHTML = requests.map(r=>`<div class="pwreq"><div class="grow"><b>${esc(r.user.name || r.user.username)}</b> (${esc(r.user.username)}) asked for help signing in.<div class="hint">${esc(when(r.at))} · Check it’s really them, then set a temporary password and tell them in person or by phone.</div></div>
+      <button type="button" class="btn primary" data-resetpw="${r.user.id}" data-uname="${esc(r.user.username)}">Set temporary password</button><button type="button" class="btn ghost" data-dismiss="${r.id}">Dismiss</button></div>`).join("");
+    setRequestDot(requests.length);
     $("#teamList").innerHTML = users.map(u=>{
       const me = u.id === state.user.id;
-      return `<div class="team-row"><div><b>${esc(u.name||u.username)}</b> ${me?`<span class="role-pill">You</span>`:""}<div class="hint">${esc(u.username)}${u.email ? " · "+esc(u.email) : " · <i>no email</i>"} · two-step login ${u.totpEnabled?"on":"off"}</div></div>
-      <div class="acts">${me ? `<span class="role-pill">${ROLE_LABEL[u.role]}</span>` : `<select data-role="${u.id}" aria-label="Access for ${esc(u.username)}">${ROLE_LABEL[u.role] ? "" : `<option value="" selected disabled>No access — choose a role</option>`}${Object.entries(ROLE_LABEL).map(([k,v])=>`<option value="${k}"${u.role===k?" selected":""}>${v}</option>`).join("")}</select>
-        ${u.totpEnabled?`<button type="button" class="btn ghost" data-reset2fa="${u.id}" data-uname="${esc(u.username)}">Reset two-step</button>`:""}
+      const roleCtl = isOwner() && !me
+        ? `<select data-role="${u.id}" aria-label="Access for ${esc(u.username)}">${ROLE_LABEL[u.role] ? "" : `<option value="" selected disabled>No access — choose</option>`}${["staff","manager","owner"].map(r=>`<option value="${r}"${u.role===r?" selected":""}>${ROLE_LABEL[r]}</option>`).join("")}</select>`
+        : `<span class="role-pill">${ROLE_LABEL[u.role] || u.role}</span>`;
+      const acts = u.canManage ? `${u.totpEnabled?`<button type="button" class="btn ghost" data-reset2fa="${u.id}" data-uname="${esc(u.username)}">Reset two-step</button>`:""}
         <button type="button" class="btn ghost" data-email="${u.id}" data-uname="${esc(u.username)}" data-cur="${esc(u.email||"")}">Email</button>
-        <button type="button" class="btn ghost" data-resetpw="${u.id}" data-uname="${esc(u.username)}">Reset password</button>
-        <button type="button" class="btn danger" data-rmuser="${u.id}" data-uname="${esc(u.username)}">Remove</button>`}</div></div>`;
+        <button type="button" class="btn ghost" data-resetpw="${u.id}" data-uname="${esc(u.username)}">Set temporary password</button>
+        <button type="button" class="btn danger" data-rmuser="${u.id}" data-uname="${esc(u.username)}">Remove</button>` : "";
+      return `<div class="team-row"><div><b>${esc(u.name||u.username)}</b> ${me?`<span class="role-pill">You</span>`:""}<div class="hint">${esc(u.username)}${u.email ? " · "+esc(u.email) : ""} · two-step login ${u.totpEnabled?"on":"off"}${u.mustChangePassword ? " · <b>hasn’t chosen their own password yet</b>" : ""}</div></div>
+      <div class="acts">${roleCtl}${acts}</div></div>`;
     }).join("");
   }catch(e){ $("#teamList").innerHTML = `<p class="hint">${esc(e.error)}</p>`; }
 }
@@ -334,22 +458,25 @@ $("#teamList").addEventListener("change", async e=>{
   try{ await api("PATCH", `/api/users/${s.dataset.role}`, { role:s.value }); toast("Access updated"); }
   catch(err){ $("#tError").textContent = err.error; loadTeam(); }
 });
-$("#teamList").addEventListener("click", async e=>{
-  const b = e.target.closest("button"); if(!b) return; const d = b.dataset;
+async function teamAction(b){
+  if(!b) return; const d = b.dataset;
   try{
-    if(d.email){ const v = prompt(`Email address for ${d.uname} (used for password reset links). Leave blank to remove:`, d.cur || ""); if(v === null) return; await api("PATCH", `/api/users/${d.email}`, { email:v }); toast("Email saved"); }
+    if(d.email){ const v = prompt(`Email address for ${d.uname} (optional, so the team can reach them). Leave blank to remove:`, d.cur || ""); if(v === null) return; await api("PATCH", `/api/users/${d.email}`, { email:v }); toast("Email saved"); }
     else if(d.rmuser){ if(!confirm(`Remove ${d.uname}? They won’t be able to sign in.`)) return; await api("DELETE", `/api/users/${d.rmuser}`); toast("Removed"); }
     else if(d.reset2fa){ if(!confirm(`Reset two-step login for ${d.uname}? Use this if they lost their phone. They’ll be signed out and can set it up again.`)) return; await api("POST", `/api/users/${d.reset2fa}/reset-2fa`); toast("Two-step login reset"); }
-    else if(d.resetpw){ const pw = prompt(`New temporary password for ${d.uname} (at least 10 characters):`); if(!pw) return; await api("POST", `/api/users/${d.resetpw}/reset-password`, { password:pw }); toast("Password reset. Give them the new password."); }
+    else if(d.dismiss){ await api("POST", `/api/password/requests/${d.dismiss}/dismiss`); toast("Request dismissed"); }
+    else if(d.resetpw){ const pw = prompt(`Temporary password for ${d.uname} (at least 10 characters). Tell them in person or by phone. They’ll choose their own password when they sign in:`); if(!pw) return; await api("POST", `/api/users/${d.resetpw}/reset-password`, { password:pw }); toast("Password reset. Give them the new password."); }
     else return;
     loadTeam();
   }catch(err){ $("#tError").textContent = err.error; }
-});
+}
+$("#teamList").addEventListener("click", e=>teamAction(e.target.closest("button")));
+$("#pwRequests").addEventListener("click", e=>teamAction(e.target.closest("button")));
 $("#addUserForm").addEventListener("submit", async e=>{
   e.preventDefault(); $("#tError").textContent = "";
   try{
     await api("POST","/api/users",{ name:$("#tName").value, username:$("#tUser").value, email:$("#tEmail").value, password:$("#tPass").value, role:$("#tRole").value });
-    e.target.reset(); toast("Person added. Give them their username and temporary password."); loadTeam();
+    e.target.reset(); toast("Person added. Give them their username and temporary password. They’ll choose their own when they sign in."); loadTeam();
   }catch(err){ $("#tError").textContent = err.error; }
 });
 function fillBiz(){
@@ -366,7 +493,7 @@ $("#bizForm").addEventListener("submit", async e=>{
   try{
     if(home && home !== $("#bHome").dataset.orig){
       $("#bHomeStatus").textContent = "Looking up…";
-      const g = await api("GET", `/api/geocode?q=${encodeURIComponent(home + ", Ontario")}`);
+      const g = await api("GET", `/api/geocode?q=${encodeURIComponent([home, region()].filter(Boolean).join(", "))}`);
       if(!g.results.length){ $("#bHomeStatus").textContent = ""; $("#bError").textContent = "Couldn’t find that home base. Try a town name."; return; }
       body.homeBase = { label:home, lat:g.results[0].lat, lng:g.results[0].lng };
     }
@@ -581,14 +708,20 @@ function syncFormBox(){
   $("#jFormStatus").textContent = txt;
   $("#jFormBtn").textContent = j.formCompletedAt ? "Open form" : (j.form ? "Continue form" : "Start service form");
   const link = $("#jPdfLink"); link.hidden = !j.form; link.href = `/api/jobs/${editingJob}/report.pdf`;
+  // Staff can fill in a form but not change one that's finished; managers and owners can also delete a form.
+  $("#jFormBtn").hidden = isStaff() && !!j.formCompletedAt;
+  $("#jFormDelete").hidden = !isMgr() || !j.form;
 }
 let jobReadOnly = false;
 function openJob(id, preset={}){
   editingJob = id || null;
-  jobReadOnly = false;
   const base = {type: "pm", date:todayIso(), time:"09:00", duration: 2, priority:"normal", notes:"", status:"booked", stage:"pickup", report:"", title:""};
+  if(isStaff() && !id) Object.assign(preset, { type:"personal" });
   const j = id ? state.jobs[id] : Object.assign(base, preset);
-  $("#jobDlgTitle").textContent = jobReadOnly ? "Appointment" : j.type==="personal" ? (id ? "Personal time" : "Add personal time") : (id ? "Edit job" : "New job");
+  jobReadOnly = isStaff() && !!id && !(j.type === "personal" && j.ownerId === state.user?.id);
+  jobDlg.classList.toggle("personal-only", isStaff() && !id);
+  $("#jobDlgTitle").textContent = jobReadOnly ? (j.type==="personal" ? "Personal time" : `${lbl("job")} details`) : j.type==="personal" ? (id ? "Personal time" : "Add personal time") : (id ? `Edit ${lower(lbl("job"))}` : lbl("newJob"));
+  renderCustomFields("job", j.custom); $("#jCustom").hidden = $("#jCustom").hidden || j.type === "personal";
   $("#jTypeWrap").hidden = false;
   fillCustomerSelect(j.customerId);
   if(![...document.querySelectorAll('#jType input')].some(r=>r.value===j.type) && j.type){ $("#jType").insertAdjacentHTML("afterbegin", `<label><input type="radio" name="type" value="${j.type}"> ${esc(TYPES[j.type]?.label||j.type)}</label>`); }
@@ -601,14 +734,14 @@ function openJob(id, preset={}){
   $("#jDelete").hidden = !id || jobReadOnly;
   $("#jSave").hidden = jobReadOnly;
   jobDlg.querySelectorAll(".dlg-body input, .dlg-body select, .dlg-body textarea").forEach(el=>{ el.disabled = jobReadOnly; });
-  $("#jAddCust").parentElement.hidden = false;
+  $("#jAddCust").parentElement.hidden = jobReadOnly || isStaff();
   syncTypeFields();
-  if(jobReadOnly){ $("#jReportWrap").hidden = true; $("#jFormBox").hidden = true; }
-  jobDlg.showModal();
+  if(jobReadOnly){ $("#jReportWrap").hidden = true; if(j.type === "personal") $("#jFormBox").hidden = true; }
+  jobDlg.showModal(); fireHook("jobDialog", { id: editingJob, job: j, dialog: jobDlg });
   if(!jobReadOnly) lockOpen("jobs", editingJob, j.type==="personal" ? "personal time" : "job");
 }
 jobDlg.addEventListener("close", ()=>lockClose("jobs"));
-$("#jType").addEventListener("change", ()=>{ $("#jobDlgTitle").textContent = selectedType()==="personal" ? "Personal time" : (editingJob?"Edit job":"New job"); syncTypeFields(); });
+$("#jType").addEventListener("change", ()=>{ const per = selectedType()==="personal"; $("#jobDlgTitle").textContent = per ? "Personal time" : (editingJob?`Edit ${lower(lbl("job"))}`:lbl("newJob")); $("#jCustom").hidden = per || !(state.custom?.jobFields||[]).length; syncTypeFields(); });
 $("#jAllDay").addEventListener("change", syncTypeFields);
 $("#jCustomer").addEventListener("change", showCustCard);
 
@@ -631,7 +764,7 @@ async function saveJobDialog(){
     if(!prev) job.createdBy = state.user?.name || state.user?.username;
   } else {
     Object.assign(job, { customerId, priority:$("#jPriority").value, status: editingJob ? $("#jStatus").value : "booked",
-      stage: type==="portable" ? $("#jStage").value : null, report: editingJob ? $("#jReport").value.trim() : "" });
+      stage: type==="portable" ? $("#jStage").value : null, report: editingJob ? $("#jReport").value.trim() : "", custom: readCustomFields("job", prev?.custom) });
     delete job.title;
     if(type==="portable" && job.stage==="returned" && job.status!=="cancelled") job.status = "done";
   }
@@ -659,8 +792,13 @@ $("#jDelete").addEventListener("click", ()=>{
 });
 $("#jAddCust").addEventListener("click", e=>{ e.preventDefault(); openCust(null, true); });
 $("#jFormBtn").addEventListener("click", async ()=>{
-  const id = await saveJobDialog(); if(!id) return;
+  const id = jobReadOnly ? editingJob : await saveJobDialog(); if(!id) return;
   jobDlg.close(); openForm(id);
+});
+
+$("#jFormDelete").addEventListener("click", async ()=>{
+  if(!editingJob || !confirm("Delete this service form? The report and its answers are removed, and the job goes back to Booked. This can’t be undone.")) return;
+  try{ await api("DELETE", `/api/jobs/${editingJob}/report`); toast("Service form deleted"); jobDlg.close(); await refresh(); }catch(e){ toast(e.error); }
 });
 
 /* ================= service form ================= */
@@ -866,7 +1004,7 @@ function initCustMap(){
   if(cMap || !window.L) return;
   L.Icon.Default.imagePath = "/vendor/leaflet/images/";
   cMap = L.map("cMap", { scrollWheelZoom:false }); tileLayer().addTo(cMap);
-  cMap.on("click", e=>{ setCustPin(+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6), "Pin placed by hand"); });
+  cMap.on("click", e=>{ if(isStaff()) return; setCustPin(+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6), "Pin placed by hand"); });
 }
 async function geocodeCustomer(){
   const addr = $("#cAddress").value.trim(), town = $("#cTown").value.trim();
@@ -874,10 +1012,10 @@ async function geocodeCustomer(){
   $("#cGeoStatus").textContent = "Looking up…";
   try{
     const postal = editingCust ? (state.customers[editingCust]?.postal || "") : "";
-    let r = await api("GET", `/api/geocode?q=${encodeURIComponent([addr, town, postal, "Ontario"].filter(Boolean).join(", "))}`);
+    let r = await api("GET", `/api/geocode?q=${encodeURIComponent([addr, town, postal, region()].filter(Boolean).join(", "))}`);
     if(r.results.length){ const g = r.results[0]; setCustPin(g.lat, g.lng, "Found — check the pin is on the right property"); cMap?.setView([g.lat,g.lng], 15); return true; }
     if(town){
-      r = await api("GET", `/api/geocode?q=${encodeURIComponent(town + ", Ontario")}`);
+      r = await api("GET", `/api/geocode?q=${encodeURIComponent([town, region()].filter(Boolean).join(", "))}`);
       if(r.results.length){ const g = r.results[0]; setCustPin(g.lat, g.lng, "Couldn’t find the street address — placed in the town. Drag the pin to the exact spot."); cMap?.setView([g.lat,g.lng], 13); return true; }
     }
     $("#cGeoStatus").textContent = `Address not found. Click the map where the ${eqLower()} is.`;
@@ -888,9 +1026,14 @@ $("#cGeoBtn").addEventListener("click", geocodeCustomer);
 function openCust(id, fromJob=false){
   editingCust = id || null; returnToJob = fromJob;
   const c = id ? state.customers[id] : {plan:"none"};
-  $("#custDlgTitle").textContent = id ? "Edit customer" : "Add customer";
+  $("#custDlgTitle").textContent = id ? `Edit ${lower(lbl("customer"))}` : `Add ${lower(lbl("customer"))}`;
+  renderCustomFields("customer", c.custom);
+  const ro = isStaff();
+  custDlg.querySelectorAll(".dlg-body input, .dlg-body select, .dlg-body textarea").forEach(el=>{ el.disabled = ro; });
+  custDlg.querySelectorAll('.dlg-foot button[type=submit], #cGeoBtn').forEach(b=>b.hidden = ro);
+  if(ro) $("#custDlgTitle").textContent = `${lbl("customer")} details`;
   for(const [k,s] of Object.entries(CF)) $(s).value = c[k] ?? (k==="plan"?"none":"");
-  $("#cDelete").hidden = !id;
+  $("#cDelete").hidden = !id || !isMgr();
   const extra = Object.entries(c.extra || {});
   $("#cExtraTitle").hidden = !extra.length && !c.postal; $("#cExtra").hidden = !extra.length && !c.postal;
   $("#cExtra").innerHTML = (c.postal ? `<dt>Postal code</dt><dd>${esc(c.postal)}</dd>` : "") + extra.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
@@ -898,7 +1041,7 @@ function openCust(id, fromJob=false){
   const hist = id ? Object.entries(state.jobs).filter(([,j])=>j.customerId===id && j.type!=="personal").sort((a,b)=>b[1].date.localeCompare(a[1].date)) : [];
   $("#cHistTitle").hidden = !hist.length; $("#cHistory").hidden = !hist.length;
   $("#cHistory").innerHTML = hist.map(([jid,j])=>`<div class="row"><div class="main"><div class="name">${esc(fmtLongDate(j.date))} · ${esc(TYPES[j.type]?.label||"")}</div><div class="sub">${esc(j.status==="done"?"Done":j.status==="cancelled"?"Cancelled":"Booked")}${formRecs(j.form)?" · "+esc(formRecs(j.form).slice(0,80)):""}</div></div><div class="acts">${j.form?`<a class="btn ghost" href="/api/jobs/${jid}/report.pdf" target="_blank" rel="noopener" style="text-decoration:none">Report</a>`:""}<button type="button" class="btn ghost" data-histjob="${jid}">Open</button></div></div>`).join("");
-  custDlg.showModal(); $("#cName").focus();
+  custDlg.showModal(); if(!isStaff()) $("#cName").focus(); fireHook("customerDialog", { id: editingCust, customer: c, dialog: custDlg });
   initCustMap();
   cGeo = null; if(cMarker){ cMarker.remove(); cMarker = null; }
   if(cMap){
@@ -908,7 +1051,7 @@ function openCust(id, fromJob=false){
       else { const h = homeBase(); cMap.setView([h.lat,h.lng], 10); $("#cGeoStatus").textContent = "Not on the map yet"; }
     }, 60);
   }
-  lockOpen("customers", editingCust, "customer");
+  if(!isStaff()) lockOpen("customers", editingCust, "customer");
 }
 $("#cHistory").addEventListener("click", e=>{ const b = e.target.closest("[data-histjob]"); if(!b) return; custDlg.close(); openJob(b.dataset.histjob); });
 custDlg.addEventListener("close", ()=>lockClose("customers"));
@@ -918,14 +1061,14 @@ $("#custForm").addEventListener("submit", async e=>{
   const prev = editingCust ? state.customers[editingCust] : {};
   const c = Object.assign({}, prev, {createdAt: prev.createdAt || Date.now()});
   for(const [k,s] of Object.entries(CF)) c[k] = k==="kw" ? (Number($(s).value)||"") : $(s).value.trim();
-  c.name = name;
+  c.name = name; c.custom = readCustomFields("customer", prev.custom);
   const addrChanged = (prev.address||"") !== c.address || (prev.town||"") !== c.town;
   if(!cGeo && (c.address || c.town) && (addrChanged || !hasLoc(prev))) await geocodeCustomer();
   if(cGeo){ c.lat = cGeo.lat; c.lng = cGeo.lng; } else { delete c.lat; delete c.lng; }
   if(editingCust && !(await confirmNoConflict("customers", editingCust))){ custDlg.close(); return; }
   const id = editingCust || newId();
   put("customers", id, c);
-  custDlg.close(); toast(editingCust ? "Customer saved" : "Customer added" + (cGeo ? "" : " — not on the map yet"));
+  custDlg.close(); toast(editingCust ? `${lbl("customer")} saved` : `${lbl("customer")} added` + (cGeo ? "" : " — not on the map yet"));
   if(returnToJob){ fillCustomerSelect(id); }
 });
 $("#cDelete").addEventListener("click", ()=>{
@@ -1479,7 +1622,7 @@ async function impGeocode(ids){
   for(let i = 0; i < ids.length && !imp.stopGeo; i++){
     const c = state.customers[ids[i]]; if(!c) continue;
     $("#geoStatus").textContent = `Looking up ${c.name}… (${i+1} of ${ids.length})`;
-    const tries = [[c.address, c.town, c.postal, "Ontario"], [c.postal, "Ontario"], [c.town, "Ontario"]].map(a=>a.filter(Boolean)).filter(a=>a.length > 1);
+    const tries = [[c.address, c.town, c.postal, region()], [c.postal, region()], [c.town, region()]].map(a=>a.filter(Boolean)).filter(a=>a.length > 1);
     let hit = null, k = 0;
     for(; k < tries.length && !hit; k++){
       try{ const res = await api("GET", `/api/geocode?q=${encodeURIComponent(tries[k].join(", "))}`); if(res.results.length) hit = res.results[0]; }catch(e){}
@@ -1584,9 +1727,8 @@ enhancePasswords();
 /* ================= start ================= */
 (async function init(){
   render();
-  const rt = new URLSearchParams(location.search).get("reset");
-  if(rt){ history.replaceState(null, "", location.pathname + location.hash); await startReset(rt); }   // keep the token out of history
-  try{ if(await loadMe()) await refresh(); }
+  if(new URLSearchParams(location.search).has("reset")) history.replaceState(null, "", location.pathname + location.hash);   // old reset links no longer apply
+  try{ if(await loadMe()){ await refresh(); fireHook("ready", state); } }
   catch(e){ if(e.status !== 401 && e.code !== "2fa_required") setStatus(); }
   { const h = location.hash.slice(1); if(VIEWS.includes(h)) showView(h); }
   setInterval(refresh, 30000);

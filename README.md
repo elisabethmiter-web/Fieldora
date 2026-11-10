@@ -135,26 +135,78 @@ The business name (set at setup or in **Business settings**) appears in the app 
 
 ## Accounts and access
 
-The owner adds people under **Account → Team** and gives each one of two access levels:
+People are added under **Account → Team** and given one of three access levels. The server enforces these rules, not just the screen.
 
 | Access | Can do |
 |---|---|
-| **Owner** | Everything, plus manage the team, business settings, and two-step login rules |
-| **Staff** | Jobs, customers, map, service forms and emails, backups |
+| **Staff** | See the schedule, customers and map; open jobs and customers (view only); fill in and finish service forms; view and share reports; add, change or delete **their own** personal time. Can't create, change or delete jobs or customers, change or delete a finished form, design forms, import, export or manage the team. |
+| **Manager** | Everything Staff can do, plus create, change and delete jobs and customers; book visits and plan trips; set up and customize service forms and the logo; change or **delete** service forms; import and export. On the team: add Staff, set a temporary password or reset two-step login for Staff, remove Staff, and handle Staff password requests. |
+| **Owner** | Everything, including business settings, trade and job types, two-step login rules, adding or removing Managers and Owners, changing anyone's access, setting a temporary password for anyone, and Account → Support access. There always has to be at least one Owner. |
 
-The server enforces these rules, not just the screen.
-
-The owner can also reset someone's password or two-step login (for example, if they lose their phone), change their access, or remove them. There always has to be at least one Owner.
+New people get a temporary password from whoever adds them, and must choose their own password the first time they sign in.
 
 ## Forgot password
 
-Anyone can tap **Forgot password?** on the sign-in screen, enter their username or email address, and get a link by email to choose a new password.
+There are no reset emails. Instead:
 
-- **Needs an email address on the account.** The owner adds one during setup; anyone can add or change their own under **Account → Your email**; and the owner can set each person's under **Account → Team → Email**. Two people can share an address (one email lists both accounts).
-- **Needs Outlook connected** (see **Connect Outlook email** below). Until it is, the screen tells people to ask the owner, who can still use **Reset password** in the Team list.
-- **Safe by design:** each link works once and expires after 1 hour; asking again cancels the previous link; requests are rate-limited; and the app gives the same answer whether or not an account exists, so it can't be used to find usernames. Resetting signs the account out everywhere. Two-step login still applies afterwards.
-- **Reset emails are not copied** to the business mailbox or its Sent Items, so people with access to that mailbox can't use someone else's link.
-- **The link's web address** comes from Render automatically (your `.onrender.com` address). **If you add your own web address** (see below), also set `APP_URL` to it on Render, e.g. `https://schedule.yourbusiness.com`, so reset links use it.
+1. The person taps **Forgot password?** on the sign-in screen and enters their username (or simply asks an Owner or Manager).
+2. The request appears at the top of **Account → Team** for the company's Owners and Managers (with a red dot on **Account**), and in the **Fielora Admin** dashboard if support access is on. Managers see requests from Staff; Owners see everyone's.
+3. Whoever helps checks it's really that person, taps **Set temporary password**, and tells them the password in person or by phone. That signs the person out everywhere.
+4. When they sign in with the temporary password, Fielora makes them choose their own password before they can do anything else. The temporary password can't be reused.
+
+The sign-in screen gives the same answer whether or not a username exists, and repeated requests are rate-limited, so it can't be used to discover accounts. Two-step login still applies after a password change.
+
+## Customizing Fielora for one customer
+
+Every customer runs the same Fielora code, so updates reach everyone. When one customer wants something just for them, there are two ways, and neither affects anyone else.
+
+**1. No-code customizations (from Fielora Admin).** Open the customer in the dashboard → **Customize for this customer**. Changes apply to their app only, straight away, with no redeploy:
+
+- **Parts of the app:** hide Map, Maintenance due, the shop board, Import or Help chat. (Import and Help chat are also blocked on the server.)
+- **Their words:** rename Schedule, Map, Maintenance due, Customers/Customer, Jobs/Job and New job, e.g. "Clients" and "Work order". The AI assistant uses their words too.
+- **Extra fields** on customers and on jobs (short or long text, number, list of choices, yes/no, date). They appear under **More details** in the customer and job windows, in the Excel export, and on service reports if you tick **On report**. Removing a field later never deletes values already entered.
+- **Brand colour** for buttons and highlights, and **province or state** (used to find addresses on the map and printed on reports; default Ontario).
+- **A note on every service report** (warranty terms, licence number…), **notes for the AI assistant** about how they work, and **custom styling (CSS)** for small visual tweaks (anything that loads files is refused).
+- **Start from another customer's setup** copies settings from a similar customer as a starting point.
+
+Every change is recorded in the customer's **Account → Support access** log.
+
+**2. Customer-only code (for one-off features).** If they need something the options above can't do, add a folder in `custom/` (see `custom/README.md`, with a working example), then set `FIELORA_CUSTOM` to the folder name on **that customer's** Render service. Only their app loads it. The dashboard shows which custom code each customer runs, and flags it if it fails to load.
+
+## Support access (Fielora Admin)
+
+Your IT provider can look after this app from their **Fielora Admin** dashboard: checking it's running, helping with account recovery (password requests, temporary passwords, two-step login resets, adding a recovery owner), downloading backups, and posting notices such as planned maintenance.
+
+- **It's off unless you turn it on.** Support access only works when this app has an environment variable `ADMIN_API_KEY` on Render (at least 32 characters), set to the key your provider's dashboard gives you. Delete it to turn support access off immediately.
+- **You can see everything.** The owner can check under **Account → Support access** whether it's on, and every action taken through it (what was done, to whom, by whom, and when).
+- **What it can't do:** it can't see or change your jobs, customers or service forms one by one. It can download a full backup.
+- **Notices** appear as a banner at the top of the app for everyone. Each person can hide a notice once they've read it.
+
+## Help chat (AI assistant + your support team)
+
+The **Help** button opens a chat. The **Fielora assistant** answers how-to questions straight away, and a person from your support team can step in from the **Fielora Admin** dashboard.
+
+- **How the assistant answers:** it uses Anthropic's Claude AI with a built-in guide to Fielora (`lib/help-guide.md`) plus the business's name, trade and job types. It's told to answer only from that guide, keep answers short, and never pretend it can change accounts or data.
+- **Handing over to a person:** anyone can tap **Talk to a person**. The assistant also hands over on its own for account recovery, lost data, errors, billing, connecting Outlook/SharePoint, or anything outside the guide. Once a person has the chat, the assistant stays quiet until support hands it back.
+- **Replies from support** show with the person's name. If the chat window is closed, a red dot appears on **Help**.
+- **Limits:** each person gets up to 40 assistant answers an hour (to keep AI costs predictable); after that the chat goes to a person. If the AI service is down, the chat is handed to a person automatically.
+- **Privacy:** chats are stored in this app's own database. The text of messages sent while the assistant is answering goes to Anthropic to produce the answer (processed in the United States). The chat window says so and reminds people never to share passwords or codes. Mention this in your privacy notice.
+
+**Turning it on** (environment variables on Render):
+
+| Key | What it does |
+|---|---|
+| `ANTHROPIC_API_KEY` | Turns on the AI assistant. Create a key at console.anthropic.com. You can use the same key for every customer's app; usage is billed to that Anthropic account. |
+| `ADMIN_API_KEY` | (Already used for support access.) Also lets people from the Fielora Admin dashboard reply in chats. |
+| `SUPPORT_NAME` | Optional. The team name shown in chat, e.g. `Helm Support`. Default: `Fielora Support`. |
+| `SUPPORT_CONTACT` | Optional. Shown when someone asks for a person but support access is off, e.g. `Helm MSP at liz@helmmsp.ca`. |
+| `ANTHROPIC_MODEL` | Optional. The Claude model to use. Default: `claude-sonnet-5-5`. `claude-haiku-5-5` is cheaper and faster but less thorough. |
+
+With only `ANTHROPIC_API_KEY`: assistant only. With only `ADMIN_API_KEY`: messages go straight to your support team. With neither, the Help button is hidden.
+
+**Cost:** with Claude Sonnet 5.5, each assistant answer typically costs around one to two cents (the guide is cached between messages to keep this down). See Anthropic's pricing page for current rates.
+
+**Keeping the assistant accurate:** when you add or change a feature, update `lib/help-guide.md`. The assistant only knows what's in that file.
 
 ## Two-step login
 
@@ -233,7 +285,7 @@ If someone else has the same job, personal time or customer open, a yellow banne
 
 ## Use your own web address (optional)
 
-To use something like `schedule.yourbusiness.com`: in Render, open the web service → **Settings → Custom Domains**, add the address, then add the CNAME record Render shows wherever the yourbusiness.com domain's DNS is managed. Render issues the HTTPS certificate automatically. Then add an environment variable `APP_URL` set to the new address (e.g. `https://schedule.yourbusiness.com`) so password reset emails link to it.
+To use something like `schedule.yourbusiness.com`: in Render, open the web service → **Settings → Custom Domains**, add the address, then add the CNAME record Render shows wherever the yourbusiness.com domain's DNS is managed. Render issues the HTTPS certificate automatically.
 
 ## Costs, data location and backups
 

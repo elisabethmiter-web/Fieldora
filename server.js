@@ -9,6 +9,7 @@ const mail = require("./lib/mail");
 const { buildReport } = require("./lib/report-pdf");
 const importer = require("./lib/importer");
 const graph = require("./lib/graph");
+const custom = require("./lib/custom");
 const forms = require("./lib/forms");
 const industries = require("./lib/industries");
 const archiver = require("archiver");
@@ -29,7 +30,7 @@ const pool = new Pool({
 });
 
 const COLLECTIONS = new Set(["customers", "jobs"]);
-const ROLES = ["owner", "staff"];
+const ROLES = ["owner", "manager", "staff"];
 const SESSION_DAYS = 30;
 const COOKIE = "fielora_session";
 // Fields on a job that only the maintenance-form endpoints may change.
@@ -53,11 +54,43 @@ async function migrate() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_codes JSONB NOT NULL DEFAULT '[]';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
-    CREATE TABLE IF NOT EXISTS password_resets (
-      token_hash TEXT PRIMARY KEY,
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS support_threads (
+      id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      status TEXT NOT NULL DEFAULT 'open',
+      mode TEXT NOT NULL DEFAULT 'ai',
+      last_sender TEXT NOT NULL DEFAULT 'user',
+      user_read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      admin_read_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS support_messages (
+      id SERIAL PRIMARY KEY,
+      thread_id INTEGER NOT NULL REFERENCES support_threads(id) ON DELETE CASCADE,
+      sender TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS support_messages_thread ON support_messages (thread_id, id);
+    CREATE TABLE IF NOT EXISTS admin_log (
+      id SERIAL PRIMARY KEY,
+      at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      admin TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT ''
+    );
+    DROP TABLE IF EXISTS password_resets;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
+    CREATE TABLE IF NOT EXISTS password_requests (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'open',
+      handled_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      handled_at TIMESTAMPTZ
     );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -98,6 +131,7 @@ async function getSettings() {
   const out = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   for (const r of rows) out[r.key] = out[r.key] && typeof out[r.key] === "object" && !Array.isArray(out[r.key]) && r.value && typeof r.value === "object" ? { ...out[r.key], ...r.value } : r.value;
   out.industry = industries.sanitize(out.industry || { preset: "general" });
+  out.custom = custom.merge(out.custom);
   if (!out.forms || !Array.isArray(out.forms.templates)) out.forms = forms.sanitize(industries.presetForms(out.industry.preset));
   return out;
 }
@@ -105,7 +139,7 @@ async function getLogo() {
   const r = (await pool.query("SELECT value FROM settings WHERE key = 'logo'")).rows[0];
   return r?.value?.data ? { mime: r.value.mime, buffer: Buffer.from(r.value.data, "base64"), v: r.value.v } : null;
 }
-async function reportAssets(settings) { return { business: settings.business, logo: await getLogo(), footer: settings.forms?.footer || "", industry: settings.industry }; }
+async function reportAssets(settings) { return { business: settings.business, logo: await getLogo(), footer: settings.forms?.footer || "", industry: settings.industry, custom: settings.custom }; }
 async function putSetting(key, value) {
   await pool.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [key, JSON.stringify(value)]);
 }
@@ -173,6 +207,7 @@ function readCookie(req, name) {
   return null;
 }
 function setSession(res, user) {
+  pool.query("UPDATE users SET last_login_at = now() WHERE id = $1", [user.id]).catch(() => {});
   const token = sign({ t: "s", uid: user.id, v: user.session_version, exp: Date.now() + SESSION_DAYS * 864e5 });
   res.setHeader("Set-Cookie", `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${IS_PROD ? "; Secure" : ""}`);
 }
@@ -215,10 +250,11 @@ function requireAjax(req, res, next) {
 app.use("/api", requireAjax);
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const USER_COLS = "id, username, name, email, role, session_version, totp_enabled";
+const USER_COLS = "id, username, name, email, role, session_version, totp_enabled, must_change_password";
 
 // Paths a signed-in user may reach before finishing required 2FA setup.
 const SETUP_ALLOWED = new Set(["/api/me", "/api/logout", "/api/2fa/setup", "/api/2fa/enable"]);
+const CHANGE_ALLOWED = new Set(["/api/me", "/api/logout", "/api/password"]);
 const auth = wrap(async (req, res, next) => {
   const p = verify(readCookie(req, COOKIE));
   if (!p || p.t !== "s") return res.status(401).json({ error: "Sign in to continue." });
@@ -230,15 +266,19 @@ const auth = wrap(async (req, res, next) => {
   if (req.settings.require2fa && !req.user.totp_enabled && !SETUP_ALLOWED.has(req.baseUrl + req.path) && !SETUP_ALLOWED.has(req.originalUrl.split("?")[0])) {
     return res.status(403).json({ error: "Set up two-step login to continue.", code: "2fa_required" });
   }
+  if (req.user.must_change_password && !CHANGE_ALLOWED.has(req.originalUrl.split("?")[0])) {
+    return res.status(403).json({ error: "Choose a new password to continue.", code: "password_change_required" });
+  }
   next();
 });
 const allow = (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({ error: "Your account doesn’t have access to that." });
-const workers = allow("owner", "staff");
+const workers = allow("owner", "manager", "staff");
+const managers = allow("owner", "manager");   // set up forms, edit/delete jobs and customers, import/export, help with passwords
 
 app.get("/healthz", wrap(async (req, res) => { await pool.query("SELECT 1"); res.send("ok"); }));
 
 /* ---------- setup + sign-in ---------- */
-function publicUser(u) { return { id: u.id, username: u.username, name: u.name, email: u.email || "", role: u.role, totpEnabled: !!u.totp_enabled }; }
+function publicUser(u) { return { id: u.id, username: u.username, name: u.name, email: u.email || "", role: u.role, totpEnabled: !!u.totp_enabled, mustChangePassword: !!u.must_change_password }; }
 // An email address is optional; when given it must look valid. Used for password reset links.
 function cleanEmail(v) {
   const e = String(v ?? "").trim().toLowerCase().slice(0, 200);
@@ -253,7 +293,7 @@ function validateNewUser(username, password) {
 
 app.get("/api/setup", wrap(async (req, res) => {
   const { rows } = await pool.query("SELECT count(*)::int AS n FROM users");
-  res.json({ needsSetup: rows[0].n === 0, presets: rows[0].n === 0 ? industries.presetList() : undefined, resetByEmail: mail.configured() });
+  res.json({ needsSetup: rows[0].n === 0, presets: rows[0].n === 0 ? industries.presetList() : undefined });
 }));
 
 app.post("/api/setup", wrap(async (req, res) => {
@@ -336,79 +376,40 @@ app.post("/api/login/2fa", wrap(async (req, res) => {
 
 app.post("/api/logout", (req, res) => { clearSession(res); res.json({ ok: true }); });
 
-/* ---------- forgot password ---------- */
-const RESET_MINUTES = 60;
-// The link must point at this app's real address, never at the Host header a stranger sent
-// (that would let someone get a reset link emailed that points to their own site).
-function appUrl(req) {
-  const base = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
-  if (base) return base.replace(/\/+$/, "");
-  return process.env.NODE_ENV === "production" ? "" : `${req.protocol}://${req.get("host")}`;
-}
-async function sendResetEmail(req, users, to) {
-  const st = await getSettings(); const biz = st.business.name || "Fielora";
-  const base = appUrl(req);
-  if (!base) { console.error("Password reset: set APP_URL so reset links know the app's address."); return; }
-  const links = [];
-  for (const u of users) {
-    const token = crypto.randomBytes(32).toString("base64url");
-    await pool.query("DELETE FROM password_resets WHERE user_id = $1", [u.id]);   // only the newest link works
-    await pool.query("INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, now() + make_interval(mins => $3))", [sha256(token), u.id, RESET_MINUTES]);
-    links.push({ u, url: `${base}/?reset=${token}` });
+/* ---------- forgot password: a request to the company's owners/managers and to support ---------- */
+// No email involved. Whoever helps sets a temporary password, which must be changed at the next sign-in.
+app.post("/api/password/request", wrap(async (req, res) => {
+  const username = String(req.body?.username || "").trim().toLowerCase().slice(0, 40);
+  if (!username) return res.status(400).json({ error: "Enter your username." });
+  const ipKey = `pwreq|${req.ip}`, uKey = `pwreq|${username}`;
+  if (throttled(ipKey) || throttled(uKey)) return res.status(429).json({ error: "Too many requests. Wait 15 minutes and try again." });
+  recordFailure(ipKey, 10); recordFailure(uKey, 3);
+  // Same answer whether or not the username exists, so this can't be used to find accounts.
+  const u = (await pool.query("SELECT id, role FROM users WHERE username = $1", [username])).rows[0];
+  if (u && ROLES.includes(u.role)) {
+    const open = (await pool.query("SELECT id FROM password_requests WHERE user_id = $1 AND status = 'open'", [u.id])).rows[0];
+    if (open) await pool.query("UPDATE password_requests SET created_at = now() WHERE id = $1", [open.id]);
+    else await pool.query("INSERT INTO password_requests (user_id) VALUES ($1)", [u.id]);
   }
-  const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const blocks = links.map(({ u, url }) => `
-    <p style="margin:18px 0 8px 0">${links.length > 1 ? `Account <b>${esc(u.username)}</b>${u.name ? ` (${esc(u.name)})` : ""}:` : `Your username is <b>${esc(u.username)}</b>.`}</p>
-    <p style="margin:0 0 6px 0"><a href="${url}" style="display:inline-block;background:#F4C20D;color:#1D2125;font-weight:bold;text-decoration:none;padding:12px 26px;border-radius:24px">Choose a new password</a></p>`).join("");
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;color:#1D2125;max-width:520px">
-    <p style="margin:0 0 12px 0">Someone asked to reset the password for your ${esc(biz)} scheduling account.</p>${blocks}
-    <p style="margin:18px 0 0 0;color:#555C62">The link works once and expires in ${RESET_MINUTES} minutes. If you didn’t ask for this, you can ignore this email and your password won’t change.</p></div>`;
-  await mail.sendMail({ to: [to], subject: `Reset your password — ${biz}`, html, bccSelf: false, saveCopy: false });
+  res.json({ ok: true, support: adminEnabled() });
+}));
+// Who may help whom: owners help anyone; managers help staff.
+const canManage = (actor, target) => actor.role === "owner" || (actor.role === "manager" && target.role === "staff");
+async function openPasswordRequests(actor) {
+  const { rows } = await pool.query(`SELECT r.id, r.created_at, u.id AS user_id, u.username, u.name, u.role FROM password_requests r JOIN users u ON u.id = r.user_id
+    WHERE r.status = 'open' ORDER BY r.created_at`);
+  return rows.filter(r => !actor || canManage(actor, r)).map(r => ({ id: r.id, at: r.created_at, user: { id: r.user_id, username: r.username, name: r.name, role: r.role } }));
 }
-app.post("/api/password/forgot", wrap(async (req, res) => {
-  if (!mail.configured()) return res.json({ ok: true, byEmail: false });
-  const id = String(req.body?.identifier || "").trim().toLowerCase().slice(0, 200);
-  if (!id) return res.status(400).json({ error: "Enter your username or email address." });
-  const ipKey = `forgot|${req.ip}`, idKey = `forgot|${id}`;
-  if (throttled(ipKey) || throttled(idKey)) return res.status(429).json({ error: "Too many requests. Wait 15 minutes and try again." });
-  recordFailure(ipKey, 10); recordFailure(idKey, 3);
-  // Same answer whether or not the account exists, and the email is sent after replying,
-  // so the response can't be used to find out who has an account.
-  res.json({ ok: true, byEmail: true });
-  try {
-    const { rows } = await pool.query("SELECT id, username, name, email, role FROM users WHERE (username = $1 OR email = $1) AND email <> ''", [id]);
-    const byAddress = new Map();
-    for (const u of rows.filter(u => ROLES.includes(u.role))) byAddress.set(u.email, [...(byAddress.get(u.email) || []), u]);
-    for (const [to, users] of byAddress) await sendResetEmail(req, users, to);
-  } catch (e) { console.error("Password reset email failed:", e.message); }
+const closeRequests = (userId, by) => pool.query("UPDATE password_requests SET status = 'done', handled_by = $1, handled_at = now() WHERE user_id = $2 AND status = 'open'", [by, userId]);
+app.get("/api/password/requests", auth, allow("owner", "manager"), wrap(async (req, res) => res.json({ requests: await openPasswordRequests(req.user) })));
+app.post("/api/password/requests/:id/dismiss", auth, allow("owner", "manager"), wrap(async (req, res) => {
+  const r = (await pool.query("SELECT r.id, u.role FROM password_requests r JOIN users u ON u.id = r.user_id WHERE r.id = $1 AND r.status = 'open'", [Number(req.params.id)])).rows[0];
+  if (!r) return res.status(404).json({ error: "That request was already handled." });
+  if (!canManage(req.user, r)) return res.status(403).json({ error: "Only an owner can handle that request." });
+  await pool.query("UPDATE password_requests SET status = 'dismissed', handled_by = $1, handled_at = now() WHERE id = $2", [req.user.name || req.user.username, r.id]);
+  res.json({ ok: true });
 }));
-async function findReset(token) {
-  if (!/^[A-Za-z0-9_-]{40,60}$/.test(String(token || ""))) return null;
-  const { rows } = await pool.query(
-    "SELECT u.id, u.username FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash = $1 AND r.expires_at > now()", [sha256(token)]);
-  return rows[0] || null;
-}
-app.post("/api/password/reset/check", wrap(async (req, res) => {
-  const key = `resetchk|${req.ip}`;
-  if (throttled(key)) return res.status(429).json({ error: "Too many tries. Wait 15 minutes and try again." });
-  const u = await findReset(req.body?.token);
-  if (!u) { recordFailure(key, 20); return res.status(400).json({ error: "This reset link has expired or was already used. Ask for a new one.", code: "bad_token" }); }
-  res.json({ username: u.username });
-}));
-app.post("/api/password/reset", wrap(async (req, res) => {
-  const key = `reset|${req.ip}`;
-  if (throttled(key)) return res.status(429).json({ error: "Too many tries. Wait 15 minutes and try again." });
-  const password = String(req.body?.password || "");
-  if (password.length < 10) return res.status(400).json({ error: "Passwords need at least 10 characters." });
-  const u = await findReset(req.body?.token);
-  if (!u) { recordFailure(key, 20); return res.status(400).json({ error: "This reset link has expired or was already used. Ask for a new one.", code: "bad_token" }); }
-  // New password, sign out every device, and the link can't be used again.
-  await pool.query("UPDATE users SET pass_hash = $1, session_version = session_version + 1 WHERE id = $2", [hashPassword(password), u.id]);
-  await pool.query("DELETE FROM password_resets WHERE user_id = $1", [u.id]);
-  for (const k of [...attempts.keys()]) if (k.startsWith("pw|") && k.endsWith(`|${u.username}`)) attempts.delete(k);
-  res.json({ ok: true, username: u.username });
-}));
-// Each person can set the email address their reset links go to.
+// Each person can keep a contact email address on their account (optional).
 app.put("/api/me/email", auth, wrap(async (req, res) => {
   const em = cleanEmail(req.body?.email);
   if (em.error) return res.status(400).json({ error: em.error });
@@ -425,6 +426,10 @@ app.get("/api/me", auth, wrap(async (req, res) => {
     mail: { configured: mail.configured(), from: mail.configured() ? mail.mailFrom() : "" },
     sharepoint: { configured: graph.configured() },
     industry: s.industry, presets: industries.presetList(),
+    notice: s.notice && s.notice.text ? s.notice : null,
+    supportChat: chatEnabled() && s.custom.features.help,
+    passwordRequests: ["owner", "manager"].includes(req.user.role) ? (await openPasswordRequests(req.user)).length : 0,
+    custom: { ...s.custom, assistantNotes: undefined },
     forms: s.forms,
     branding: { logo: !!(await pool.query("SELECT 1 FROM settings WHERE key = 'logo'")).rows.length },
     // Optional backup map provider (e.g. MapTiler, Stadia, Thunderforest) set on Render.
@@ -490,7 +495,8 @@ app.put("/api/settings", auth, allow("owner"), wrap(async (req, res) => {
 app.get("/api/data", auth, wrap(async (req, res) => {
   const [c, j] = await Promise.all([pool.query("SELECT id, data FROM customers"), pool.query("SELECT id, data FROM jobs")]);
   const toMap = rows => Object.fromEntries(rows.map(r => [r.id, r.data]));
-  res.json({ customers: toMap(c.rows), jobs: toMap(j.rows) });
+  res.json({ customers: toMap(c.rows), jobs: toMap(j.rows), notice: req.settings.notice?.text ? req.settings.notice : null, supportUnread: chatEnabled() && req.settings.custom.features.help ? await supportUnread(req.user.id) : 0,
+    passwordRequests: ["owner", "manager"].includes(req.user.role) ? (await openPasswordRequests(req.user)).length : 0 });
 }));
 
 const validId = id => /^[a-z0-9]{6,40}$/i.test(String(id));
@@ -501,9 +507,21 @@ app.put("/api/:coll/:id", (req, res, next) => COLLECTIONS.has(req.params.coll) ?
   const data = req.body;
   if (!data || typeof data !== "object" || Array.isArray(data)) return res.status(400).json({ error: "Invalid data." });
   const existing = (await pool.query(`SELECT data FROM ${coll} WHERE id = $1`, [id])).rows[0]?.data;
+  if (req.user.role === "staff") {
+    const ownPersonal = coll === "jobs" && data.type === "personal" && (!existing || (existing.type === "personal" && existing.ownerId === req.user.id));
+    if (!ownPersonal) return res.status(403).json({ error: "Staff can view jobs and customers but not change them. Ask a manager or owner.", code: "not_allowed" });
+  }
+  if (coll === "jobs" && data.type === "personal") data.ownerId = existing?.ownerId ?? req.user.id;
   if (coll === "jobs") {
     if (data.type === "personal") { delete data.customerId; data.title = String(data.title || "").slice(0, 120); }
     for (const f of PROTECTED_JOB_FIELDS) { if (existing && f in existing) data[f] = existing[f]; else delete data[f]; }
+  }
+  {
+    const fields = coll === "jobs" ? req.settings.custom.jobFields : req.settings.custom.customerFields;
+    const known = new Set(fields.map(f => f.id)), kept = {};
+    for (const [k, v] of Object.entries(existing?.custom || {})) if (!known.has(k)) kept[k] = v;
+    const vals = { ...kept, ...custom.cleanValues(fields, data.custom) };
+    if (Object.keys(vals).length) data.custom = vals; else delete data.custom;
   }
   if (coll === "customers") {
     if (data.lat !== undefined && data.lat !== "" && !isFinite(Number(data.lat))) delete data.lat;
@@ -517,19 +535,26 @@ app.put("/api/:coll/:id", (req, res, next) => COLLECTIONS.has(req.params.coll) ?
 
 app.delete("/api/:coll/:id", (req, res, next) => COLLECTIONS.has(req.params.coll) ? next() : next("route"), auth, wrap(async (req, res) => {
   const { coll, id } = req.params;
+  if (req.user.role === "staff") {
+    const ex = (await pool.query(`SELECT data FROM ${coll} WHERE id = $1`, [id])).rows[0]?.data;
+    if (!(coll === "jobs" && ex?.type === "personal" && ex.ownerId === req.user.id)) return res.status(403).json({ error: "Only a manager or owner can delete that.", code: "not_allowed" });
+  }
   await pool.query(`DELETE FROM ${coll} WHERE id = $1`, [id]);
   res.json({ ok: true });
 }));
 
-app.get("/api/export", auth, workers, wrap(async (req, res) => {
+async function buildBackup() {
   const [c, j] = await Promise.all([
     pool.query("SELECT id, data, updated_at FROM customers ORDER BY id"),
     pool.query("SELECT id, data, updated_at FROM jobs ORDER BY id"),
   ]);
+  const settings = (await pool.query("SELECT key, value FROM settings WHERE key <> 'require2fa'")).rows;
+  return { exportedAt: new Date().toISOString(), customers: c.rows, jobs: j.rows, settings };
+}
+app.get("/api/export", auth, managers, wrap(async (req, res) => {
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Disposition", `attachment; filename="fielora-backup-${stamp}.json"`);
-  const settings = (await pool.query("SELECT key, value FROM settings WHERE key <> 'require2fa'")).rows;
-  res.json({ exportedAt: new Date().toISOString(), customers: c.rows, jobs: j.rows, settings });
+  res.json(await buildBackup());
 }));
 
 /* ---------- address lookup for the map (OpenStreetMap Nominatim) ---------- */
@@ -606,6 +631,7 @@ app.post("/api/jobs/:id/report", auth, workers, wrap(async (req, res) => {
   const { job, customer } = await loadJobAndCustomer(id);
   if (!job) return res.status(404).json({ error: "That job no longer exists." });
   if (job.type === "personal") return res.status(400).json({ error: "Personal time doesn’t have a service form." });
+  if (job.formCompletedAt && req.user.role === "staff") return res.status(403).json({ error: "This form is finished. Only a manager or owner can change it.", code: "not_allowed" });
   const { form, missing } = cleanForm(req.body?.form, req.settings);
   const complete = !!req.body?.complete, send = !!req.body?.send;
   if (complete && missing.length) return res.status(400).json({ error: `Fill in the required field${missing.length > 1 ? "s" : ""}: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "…" : ""}` });
@@ -650,6 +676,16 @@ app.post("/api/jobs/:id/report", auth, workers, wrap(async (req, res) => {
   res.json({ ok: true, completed: complete, sent, sendError });
 }));
 
+app.delete("/api/jobs/:id/report", auth, managers, wrap(async (req, res) => {
+  const { id } = req.params;
+  if (!validId(id)) return res.status(400).json({ error: "Invalid id." });
+  const row = (await pool.query("SELECT data FROM jobs WHERE id = $1", [id])).rows[0];
+  if (!row?.data.form) return res.status(404).json({ error: "This job doesn’t have a service form." });
+  const next = { ...row.data }; for (const f of PROTECTED_JOB_FIELDS) delete next[f];
+  if (next.status === "done") next.status = "booked";
+  await pool.query("UPDATE jobs SET data = $1, updated_at = now() WHERE id = $2", [next, id]);
+  res.json({ ok: true });
+}));
 app.post("/api/jobs/:id/report/send", auth, workers, wrap(async (req, res) => {
   const { id } = req.params;
   const { job, customer } = await loadJobAndCustomer(id);
@@ -741,14 +777,14 @@ app.get("/api/industry/preset/:id", auth, allow("owner"), (req, res) => {
 });
 
 /* ---------- service form builder + logo (owner) ---------- */
-app.put("/api/forms", auth, allow("owner"), wrap(async (req, res) => {
+app.put("/api/forms", auth, managers, wrap(async (req, res) => {
   let cfg; try { cfg = forms.sanitize(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
   await putSetting("forms", cfg); res.json({ forms: cfg });
 }));
-app.post("/api/forms/reset", auth, allow("owner"), wrap(async (req, res) => {
+app.post("/api/forms/reset", auth, managers, wrap(async (req, res) => {
   await pool.query("DELETE FROM settings WHERE key = 'forms'"); res.json({ forms: forms.sanitize(industries.presetForms(req.settings.industry.preset)) });
 }));
-app.post("/api/forms/preview", auth, allow("owner"), wrap(async (req, res) => {
+app.post("/api/forms/preview", auth, managers, wrap(async (req, res) => {
   let tpl; try { tpl = forms.sanitize({ templates: [req.body?.template], assign: {} }).templates[0]; } catch (e) { return res.status(400).json({ error: e.message }); }
   const sample = { text: "Sample answer", textarea: "Sample notes written on site. Everything checked and working normally.", number: "12.6", select: null, yesno: "Yes", date: new Date().toISOString().slice(0, 10) };
   const values = {}; let k = 0;
@@ -766,14 +802,14 @@ app.get("/api/branding/logo", auth, wrap(async (req, res) => {
   const logo = await getLogo(); if (!logo) return res.status(404).end();
   res.setHeader("Content-Type", logo.mime); res.setHeader("Cache-Control", "private, max-age=300"); res.send(logo.buffer);
 }));
-app.post("/api/branding/logo", auth, allow("owner"), wrap(async (req, res) => {
+app.post("/api/branding/logo", auth, managers, wrap(async (req, res) => {
   const m = String(req.body?.data || "").match(/^data:(image\/(png|jpeg));base64,([A-Za-z0-9+/=]+)$/);
   if (!m) return res.status(400).json({ error: "Use a PNG or JPG image for the logo." });
   const buf = Buffer.from(m[3], "base64");
   if (buf.length > 1.5 * 1024 * 1024) return res.status(400).json({ error: "That logo is too large. Use an image under 1.5 MB." });
   await putSetting("logo", { mime: m[1], data: m[3], v: Date.now() }); res.json({ ok: true });
 }));
-app.delete("/api/branding/logo", auth, allow("owner"), wrap(async (req, res) => {
+app.delete("/api/branding/logo", auth, managers, wrap(async (req, res) => {
   await pool.query("DELETE FROM settings WHERE key = 'logo'"); res.json({ ok: true });
 }));
 
@@ -796,27 +832,27 @@ function styleSheet(ws) {
   ws.columns.forEach(c => { let w = (c.header || "").length; c.eachCell({ includeEmpty: false }, cell => { w = Math.max(w, Math.min(60, String(cell.value ?? "").length)); }); c.width = Math.max(10, w + 2); });
   ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columnCount } };
 }
-app.get("/api/export/workbook.xlsx", auth, workers, wrap(async (req, res) => {
+app.get("/api/export/workbook.xlsx", auth, managers, wrap(async (req, res) => {
   const [cr, jr] = await Promise.all([pool.query("SELECT id, data FROM customers"), pool.query("SELECT id, data FROM jobs")]);
   const customers = Object.fromEntries(cr.rows.map(r => [r.id, r.data]));
   const wb = new ExcelJS.Workbook(); wb.creator = "Fielora"; const TYPE_LABEL = typeLabels(req.settings), IND = req.settings.industry; wb.created = new Date();
   // Customers (with every extra detail as its own column)
   const extraKeys = [...new Set(cr.rows.flatMap(r => Object.keys(r.data.extra || {})))];
   const ws1 = wb.addWorksheet("Customers");
-  ws1.columns = ["Customer ID", "Name", "Phone", "Email", "Street address", "Town", "Postal code", `${IND.equipment} type`, `${IND.equipment} brand`, "Model", "Serial number", IND.sizeUnit ? `Size (${IND.sizeUnit})` : "Size", "Fuel / energy", "Maintenance plan", "Last serviced", "Next service due", "Latitude", "Longitude", "Notes", ...extraKeys].map(h => ({ header: h, key: h }));
+  ws1.columns = ["Customer ID", "Name", "Phone", "Email", "Street address", "Town", "Postal code", `${IND.equipment} type`, `${IND.equipment} brand`, "Model", "Serial number", IND.sizeUnit ? `Size (${IND.sizeUnit})` : "Size", "Fuel / energy", "Maintenance plan", "Last serviced", "Next service due", "Latitude", "Longitude", "Notes", ...extraKeys, ...req.settings.custom.customerFields.map(f => f.label)].map((h, i) => ({ header: h, key: `c${i}` }));
   for (const r of cr.rows.sort((a, b) => a.data.name.localeCompare(b.data.name))) {
     const c = r.data;
-    ws1.addRow([r.id, c.name, c.phone, c.email, c.address, c.town, c.postal, c.equipmentType, c.brand, c.model, c.serial, c.kw, c.fuel, PLAN_LABEL[c.plan || "none"], c.lastService, c.plan && c.plan !== "none" ? addMonthsIso(c.lastService, Number(c.plan)) : "", c.lat, c.lng, c.notes, ...extraKeys.map(k => c.extra?.[k] ?? "")]);
+    ws1.addRow([r.id, c.name, c.phone, c.email, c.address, c.town, c.postal, c.equipmentType, c.brand, c.model, c.serial, c.kw, c.fuel, PLAN_LABEL[c.plan || "none"], c.lastService, c.plan && c.plan !== "none" ? addMonthsIso(c.lastService, Number(c.plan)) : "", c.lat, c.lng, c.notes, ...extraKeys.map(k => c.extra?.[k] ?? ""), ...req.settings.custom.customerFields.map(f => custom.display(f, c.custom?.[f.id]))]);
   }
   styleSheet(ws1);
   // Jobs and appointments
   const ws2 = wb.addWorksheet("Jobs and appointments");
-  ws2.columns = ["Job ID", "Date", "Start", "Hours", "Type", "Customer / title", "Town", "Status", "Priority", "Portable status", "Job notes", "Internal notes", "Service form", "Report emailed to", "Emailed on"].map(h => ({ header: h, key: h }));
+  ws2.columns = ["Job ID", "Date", "Start", "Hours", "Type", "Customer / title", "Town", "Status", "Priority", "Portable status", "Job notes", "Internal notes", "Service form", "Report emailed to", "Emailed on", ...req.settings.custom.jobFields.map(f => f.label)].map((h, i) => ({ header: h, key: `j${i}` }));
   for (const r of jr.rows.sort((a, b) => (a.data.date + (a.data.time || "")).localeCompare(b.data.date + (b.data.time || "")))) {
     const j = r.data, c = customers[j.customerId] || {};
     ws2.addRow([r.id, j.date, j.time || "All day", j.duration || "", TYPE_LABEL[j.type] || j.type, j.type === "personal" ? j.title : (c.name || "Unknown customer"), c.town || "",
       ({ booked: "Booked", parts: "Waiting on parts", done: "Done", cancelled: "Cancelled" })[j.status] || j.status, j.priority === "outage" ? "Power outage" : "Normal",
-      j.type === "portable" ? (j.stage || "") : "", j.notes || "", j.report || "", j.formCompletedAt ? "Finished" : (j.form ? "Draft" : ""), j.formSentTo || "", (j.formSentAt || "").slice(0, 10)]);
+      j.type === "portable" ? (j.stage || "") : "", j.notes || "", j.report || "", j.formCompletedAt ? "Finished" : (j.form ? "Draft" : ""), j.formSentTo || "", (j.formSentAt || "").slice(0, 10), ...req.settings.custom.jobFields.map(f => custom.display(f, j.custom?.[f.id]))]);
   }
   styleSheet(ws2);
   // One sheet per service form design, one row per filled-in form
@@ -845,7 +881,7 @@ app.get("/api/export/workbook.xlsx", auth, workers, wrap(async (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="fielora-export-${stamp()}.xlsx"`);
   await wb.xlsx.write(res); res.end();
 }));
-app.get("/api/export/reports.zip", auth, workers, wrap(async (req, res) => {
+app.get("/api/export/reports.zip", auth, managers, wrap(async (req, res) => {
   const [cr, jr] = await Promise.all([pool.query("SELECT id, data FROM customers"), pool.query("SELECT id, data FROM jobs WHERE data ? 'form'")]);
   const customers = Object.fromEntries(cr.rows.map(r => [r.id, r.data]));
   if (!jr.rows.length) return res.status(404).json({ error: "There are no service forms to export yet." });
@@ -891,7 +927,8 @@ async function parseBuffer(name, buffer, sheet) {
   if (ext === "xls") throw new Error("Old .xls files can’t be read. Open it in Excel and save as .xlsx, or export as CSV.");
   throw new Error("Use a CSV or Excel (.xlsx) file.");
 }
-app.post("/api/import/file", auth, workers, wrap(async (req, res) => {
+app.post("/api/import/file", auth, managers, wrap(async (req, res) => {
+  if (!req.settings.custom.features.import) return res.status(403).json({ error: "Importing is turned off for this app." });
   const { filename, data, sheet } = req.body || {};
   if (!filename || !data) return res.status(400).json({ error: "Choose a file to import." });
   try {
@@ -899,7 +936,8 @@ app.post("/api/import/file", auth, workers, wrap(async (req, res) => {
     storeImport(req, res, { ...parsed, label: filename });
   } catch (e) { res.status(400).json({ error: e.message || "Couldn’t read that file." }); }
 }));
-app.post("/api/import/sharepoint", auth, workers, wrap(async (req, res) => {
+app.post("/api/import/sharepoint", auth, managers, wrap(async (req, res) => {
+  if (!req.settings.custom.features.import) return res.status(403).json({ error: "Importing is turned off for this app." });
   if (!graph.configured()) return res.status(400).json({ error: "Microsoft 365 isn’t connected yet. Export the list to CSV or Excel and upload it instead, or follow “Connect SharePoint” in the README." });
   const url = String(req.body?.url || "").trim();
   let u; try { u = new URL(url); } catch { return res.status(400).json({ error: "Paste the full SharePoint link, starting with https://" }); }
@@ -935,7 +973,8 @@ async function planImport(imp, mapping, mode) {
   const counts = { create: rows.filter(r => !r.match).length, update: mode === "update" ? rows.filter(r => r.match).length : 0, skip: mode === "skip" ? rows.filter(r => r.match).length : 0, noName, inFileDupes };
   return { rows, counts, warn };
 }
-app.post("/api/import/preview", auth, workers, wrap(async (req, res) => {
+app.post("/api/import/preview", auth, managers, wrap(async (req, res) => {
+  if (!req.settings.custom.features.import) return res.status(403).json({ error: "Importing is turned off for this app." });
   const imp = imports.get(req.body?.importId);
   if (!imp || imp.userId !== req.user.id) return res.status(410).json({ error: "This import has expired. Start again." });
   const mapping = validMapping(imp, req.body.mapping);
@@ -945,7 +984,8 @@ app.post("/api/import/preview", auth, workers, wrap(async (req, res) => {
   res.json({ counts, warn, preview: rows.slice(0, 8).map(r => ({ ...r.c, _match: r.match ? (mode === "update" ? "update" : "skip") : "new" })) });
 }));
 const newId = () => Date.now().toString(36) + crypto.randomBytes(5).toString("hex");
-app.post("/api/import/commit", auth, workers, wrap(async (req, res) => {
+app.post("/api/import/commit", auth, managers, wrap(async (req, res) => {
+  if (!req.settings.custom.features.import) return res.status(403).json({ error: "Importing is turned off for this app." });
   const imp = imports.get(req.body?.importId);
   if (!imp || imp.userId !== req.user.id) return res.status(410).json({ error: "This import has expired. Start again." });
   const mapping = validMapping(imp, req.body.mapping);
@@ -981,23 +1021,338 @@ app.post("/api/import/commit", auth, workers, wrap(async (req, res) => {
   res.json(result);
 }));
 
+/* ---------- support chat (AI assistant first, a person can step in from Fielora Admin) ---------- */
+const AI_KEY = process.env.ANTHROPIC_API_KEY || "";
+const AI_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
+const SUPPORT_NAME = process.env.SUPPORT_NAME || "Fielora Support";
+const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "";
+const AI_PER_HOUR = 40;
+const HELP_GUIDE = require("fs").readFileSync(require("path").join(__dirname, "lib", "help-guide.md"), "utf8");
+const aiAvailable = () => !!AI_KEY;
+const peopleAvailable = () => adminEnabled();
+const chatEnabled = () => aiAvailable() || peopleAvailable();
+const aiCalls = new Map();   // userId -> timestamps of recent AI replies
+async function openThreadFor(userId) {
+  return (await pool.query("SELECT * FROM support_threads WHERE user_id = $1 AND status = 'open' ORDER BY id DESC LIMIT 1", [userId])).rows[0] || null;
+}
+async function threadMessages(id) {
+  return (await pool.query("SELECT id, sender, name, body, at FROM support_messages WHERE thread_id = $1 ORDER BY id", [id])).rows;
+}
+async function addMessage(threadId, sender, name, body) {
+  const m = (await pool.query("INSERT INTO support_messages (thread_id, sender, name, body) VALUES ($1, $2, $3, $4) RETURNING id, sender, name, body, at", [threadId, sender, name, body])).rows[0];
+  if (sender !== "system") await pool.query("UPDATE support_threads SET last_sender = $1, updated_at = now() WHERE id = $2", [sender, threadId]);
+  return m;
+}
+function chatState(t) {
+  return { aiAvailable: aiAvailable(), peopleAvailable: peopleAvailable(), supportName: SUPPORT_NAME, supportContact: SUPPORT_CONTACT, mode: t?.mode || (aiAvailable() ? "ai" : "human"), status: t?.status || "none" };
+}
+function customForAI(c) {
+  if (!c) return "";
+  const lines = [];
+  const off = Object.entries(custom.FEATURES).filter(([k]) => c.features[k] === false).map(([, v]) => v);
+  if (off.length) lines.push(`These parts of Fielora are turned off for this business, so never suggest them: ${off.join(", ")}.`);
+  const words = Object.entries(c.labels || {}).map(([k, v]) => `"${custom.LABELS[k]}" is called "${v}"`);
+  if (words.length) lines.push(`This business uses its own words; use them in answers: ${words.join("; ")}.`);
+  if (c.customerFields.length) lines.push(`Extra fields on each customer: ${c.customerFields.map(f => f.label).join(", ")}.`);
+  if (c.jobFields.length) lines.push(`Extra fields on each job (in the job window, under "More details"): ${c.jobFields.map(f => f.label).join(", ")}.`);
+  if (c.assistantNotes) lines.push(`Notes from the support team about this business:\n${c.assistantNotes}`);
+  return lines.length ? "About this business's setup:\n" + lines.join("\n") + "\n" : "";
+}
+function systemPrompt(user, settings) {
+  const ind = settings.industry || {};
+  const types = Object.entries(ind.jobTypes || {}).filter(([, v]) => v && v.on !== false).map(([, v]) => v.label).filter(Boolean);
+  const trade = industries.presetList().find(x => x.id === ind.preset)?.name || ind.preset || "field service";
+  return `You are the help assistant inside Fielora, a scheduling and service-report app. You are chatting with ${user.name || user.username} (access level: ${({ owner: "Owner", manager: "Manager", staff: "Staff" })[user.role] || "Staff"}) at ${settings.business.name || "a field service business"}, which uses Fielora for ${trade}.
+${types.length ? `Their job types are called: ${types.join(", ")}.` : ""} ${ind.equipment ? `They call what they service "${ind.equipment}".` : ""}
+Outlook email is ${mail.configured() ? "connected" : "not connected"} for this business. Two-step login is ${settings.require2fa ? "required for everyone" : "optional"}. Today is ${new Date().toISOString().slice(0, 10)}.
+
+${customForAI(settings.custom)}
+How to answer:
+- Answer only questions about using Fielora, using ONLY the guide below. Never invent buttons, menus or features. If the guide doesn't cover it, say you're not sure and offer to pass the question to a person.
+- Be short and practical: a sentence or two, or a few numbered steps with the exact button names in bold. Plain language, Canadian spelling, no jargon.
+- Respect their access level (see the guide's Access levels section). If the task needs a Manager or Owner, say so and tell them who to ask.
+- You can't see or change their data or account, and you can't take actions for them. Don't pretend to.
+- Never ask for or repeat passwords, codes or recovery codes. If someone shares one, tell them not to and to change it.
+- Hand the chat to a person when: they ask for a person; they need something done to an account or their data (password or two-step reset they can't do themselves, lost data, restoring a backup); it's an error, bug or something not working as the guide says; it's about billing, their contract, connecting Outlook/SharePoint or the web address; or they're frustrated or the question is outside the guide. To hand over, start your reply with [[HANDOFF]] and then write one short, friendly sentence saying you're passing this to the support team.
+- Politely decline anything unrelated to Fielora.
+
+<guide>
+${HELP_GUIDE}
+</guide>`;
+}
+async function askAI(thread, user, settings) {
+  const history = (await threadMessages(thread.id)).filter(m => m.sender !== "system").slice(-24);
+  const msgs = [];
+  for (const m of history) {
+    const role = m.sender === "user" ? "user" : "assistant";
+    const text = m.sender === "admin" ? `(${m.name} from the support team wrote:) ${m.body}` : m.body;
+    if (msgs.length && msgs[msgs.length - 1].role === role) msgs[msgs.length - 1].content += "\n\n" + text; else msgs.push({ role, content: text });
+  }
+  while (msgs.length && msgs[0].role !== "user") msgs.shift();
+  if (!msgs.length) return null;
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", signal: AbortSignal.timeout(45000),
+    headers: { "x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: AI_MODEL, max_tokens: 900, system: [{ type: "text", text: systemPrompt(user, settings), cache_control: { type: "ephemeral" } }], messages: msgs }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error?.message || `AI service error ${r.status}`);
+  return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+}
+async function handToPeople(thread, reasonText) {
+  await pool.query("UPDATE support_threads SET mode = 'human', updated_at = now() WHERE id = $1", [thread.id]);
+  thread.mode = "human";
+  const text = peopleAvailable()
+    ? (reasonText || `This chat has been passed to the ${SUPPORT_NAME} team. Someone will reply here, usually during business hours. You can close this window; we’ll show a dot on Help when they answer.`)
+    : `A person from support isn’t available in this chat. ${SUPPORT_CONTACT ? `Contact ${SUPPORT_CONTACT}.` : "Contact your IT provider, or ask an Owner in your business."}`;
+  return addMessage(thread.id, "system", "", text);
+}
+const chatOut = async (t, extra = {}) => ({ thread: t ? { id: t.id, status: t.status, mode: t.mode } : null, messages: t ? await threadMessages(t.id) : [], ...chatState(t), ...extra });
+app.get("/api/support/chat", auth, wrap(async (req, res) => {
+  const t = await openThreadFor(req.user.id);
+  if (t) await pool.query("UPDATE support_threads SET user_read_at = now() WHERE id = $1", [t.id]);
+  res.json({ enabled: chatEnabled(), ...(await chatOut(t)) });
+}));
+app.post("/api/support/chat/messages", auth, wrap(async (req, res) => {
+  if (!chatEnabled() || !req.settings.custom.features.help) return res.status(400).json({ error: "Help chat isn’t turned on for this app." });
+  const body = String(req.body?.body || "").trim().slice(0, 2000);
+  if (!body) return res.status(400).json({ error: "Type a message first." });
+  let t = await openThreadFor(req.user.id);
+  if (!t) t = (await pool.query("INSERT INTO support_threads (user_id, mode) VALUES ($1, $2) RETURNING *", [req.user.id, aiAvailable() ? "ai" : "human"])).rows[0];
+  const isNew = (await pool.query("SELECT count(*)::int AS n FROM support_messages WHERE thread_id = $1", [t.id])).rows[0].n === 0;
+  await addMessage(t.id, "user", req.user.name || req.user.username, body);
+  if (t.mode === "ai" && aiAvailable()) {
+    const now = Date.now(), recent = (aiCalls.get(req.user.id) || []).filter(x => now - x < 3600e3);
+    if (recent.length >= AI_PER_HOUR) await handToPeople(t, `That’s a lot of questions in an hour, so I’ve passed this chat to the ${SUPPORT_NAME} team. Someone will reply here.`);
+    else {
+      recent.push(now); aiCalls.set(req.user.id, recent);
+      try {
+        let answer = await askAI(t, req.user, req.settings);
+        if (answer && answer.includes("[[HANDOFF]]")) {
+          answer = answer.replace("[[HANDOFF]]", "").trim();
+          if (answer) await addMessage(t.id, "ai", "Fielora assistant", answer);
+          await handToPeople(t);
+        } else if (answer) await addMessage(t.id, "ai", "Fielora assistant", answer);
+      } catch (e) {
+        console.error("AI support reply failed:", e.message);
+        await handToPeople(t, peopleAvailable() ? `The assistant couldn’t answer just now, so I’ve passed this to the ${SUPPORT_NAME} team. Someone will reply here.` : undefined);
+      }
+    }
+  } else if (isNew && t.mode === "human" && peopleAvailable()) {
+    await addMessage(t.id, "system", "", `Thanks. The ${SUPPORT_NAME} team will reply here, usually during business hours.`);
+  }
+  t = (await pool.query("SELECT * FROM support_threads WHERE id = $1", [t.id])).rows[0];
+  await pool.query("UPDATE support_threads SET user_read_at = now() WHERE id = $1", [t.id]);
+  res.json(await chatOut(t));
+}));
+app.post("/api/support/chat/human", auth, wrap(async (req, res) => {
+  let t = await openThreadFor(req.user.id);
+  if (!t) t = (await pool.query("INSERT INTO support_threads (user_id, mode) VALUES ($1, 'ai') RETURNING *", [req.user.id])).rows[0];
+  if (t.mode !== "human") await handToPeople(t);   // always confirms with a message, even on a brand-new chat
+  res.json(await chatOut(t));
+}));
+app.post("/api/support/chat/close", auth, wrap(async (req, res) => {
+  const t = await openThreadFor(req.user.id);
+  if (t) { await addMessage(t.id, "system", "", `${req.user.name || req.user.username} closed the chat.`); await pool.query("UPDATE support_threads SET status = 'closed', updated_at = now() WHERE id = $1", [t.id]); }
+  res.json(await chatOut(null));
+}));
+async function supportUnread(userId) {
+  return (await pool.query(`SELECT count(*)::int AS n FROM support_messages m JOIN support_threads t ON t.id = m.thread_id
+    WHERE t.user_id = $1 AND t.status = 'open' AND m.sender IN ('admin','system') AND m.at > t.user_read_at`, [userId])).rows[0].n;
+}
+
+/* ---------- admin API (for the Fielora Admin dashboard) ---------- */
+// Off unless ADMIN_API_KEY is set on this app. The dashboard sends it as a Bearer token.
+// Every action is written to admin_log, which the business owner can read under Account → Support access.
+const APP_VERSION = require("./package.json").version;
+const ADMIN_KEY = process.env.ADMIN_API_KEY || "";
+const adminEnabled = () => ADMIN_KEY.length >= 32;
+const adminAuth = (req, res, next) => {
+  if (!adminEnabled()) return res.status(404).json({ error: "Admin access is turned off for this app." });
+  const key = `admin|${req.ip}`;
+  if (throttled(key)) return res.status(429).json({ error: "Too many wrong keys. Wait 15 minutes." });
+  const got = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const a = crypto.createHash("sha256").update(got).digest(), b = crypto.createHash("sha256").update(ADMIN_KEY).digest();
+  if (!got || !crypto.timingSafeEqual(a, b)) { recordFailure(key, 10); return res.status(401).json({ error: "Wrong admin key." }); }
+  attempts.delete(key);
+  req.adminName = String(req.get("x-admin-name") || "Support").slice(0, 60);
+  next();
+};
+const adminLog = (req, action, detail = "") => pool.query("INSERT INTO admin_log (admin, action, detail) VALUES ($1, $2, $3)", [req.adminName, action, String(detail).slice(0, 300)]);
+const A = express.Router();
+A.use(adminAuth);
+A.get("/status", wrap(async (req, res) => {
+  const st = await getSettings();
+  const q = async sql => (await pool.query(sql)).rows[0];
+  const [users, customers, jobs, recent, act, db] = await Promise.all([
+    q("SELECT count(*)::int AS n, count(*) FILTER (WHERE role = 'owner')::int AS owners, count(*) FILTER (WHERE role = 'manager')::int AS managers, (SELECT count(*)::int FROM password_requests WHERE status = 'open') AS pwreq, count(*) FILTER (WHERE totp_enabled)::int AS tfa, count(*) FILTER (WHERE email <> '')::int AS emails FROM users"),
+    q("SELECT count(*)::int AS n, count(*) FILTER (WHERE data->>'plan' IS NOT NULL AND data->>'plan' <> '')::int AS onplan FROM customers"),
+    q("SELECT count(*)::int AS n FROM jobs"),
+    q(`SELECT count(*) FILTER (WHERE updated_at > now() - interval '30 days')::int AS jobs30,
+              count(*) FILTER (WHERE data->'form' IS NOT NULL AND data->>'status' = 'done' AND updated_at > now() - interval '30 days')::int AS reports30 FROM jobs`),
+    q("SELECT greatest((SELECT max(updated_at) FROM jobs), (SELECT max(updated_at) FROM customers), (SELECT max(last_login_at) FROM users)) AS last"),
+    q("SELECT pg_database_size(current_database())::bigint AS bytes"),
+  ]);
+  const chats = (await pool.query("SELECT count(*) FILTER (WHERE status = 'open')::int AS open, count(*) FILTER (WHERE status = 'open' AND mode = 'human' AND last_sender <> 'admin')::int AS waiting FROM support_threads")).rows[0];
+  res.json({
+    version: APP_VERSION, node: process.version, uptimeSec: Math.round(process.uptime()),
+    business: st.business, trade: industries.presetList().find(x => x.id === st.industry?.preset)?.name || st.industry?.preset, require2fa: !!st.require2fa,
+    outlook: mail.configured(), sharepoint: graph.configured(), notice: st.notice?.text ? st.notice : null,
+    counts: { users: users.n, owners: users.owners, managers: users.managers, passwordRequests: users.pwreq, twoStep: users.tfa, withEmail: users.emails, customers: customers.n, onPlan: customers.onplan, jobs: jobs.n, jobs30: recent.jobs30, reports30: recent.reports30 },
+    lastActivity: act.last, dbBytes: Number(db.bytes),
+    chat: { ai: aiAvailable(), openChats: chats.open, waiting: chats.waiting },
+    custom: { plugin: pluginInfo(), hidden: Object.keys(st.custom.features).filter(k => !st.custom.features[k]), labels: Object.keys(st.custom.labels).length,
+      fields: st.custom.customerFields.length + st.custom.jobFields.length, css: !!st.custom.css },
+  });
+}));
+A.get("/users", wrap(async (req, res) => {
+  const { rows } = await pool.query("SELECT id, username, name, email, role, totp_enabled, must_change_password, last_login_at, created_at FROM users ORDER BY username");
+  res.json({ users: rows.map(u => ({ ...publicUser(u), lastLogin: u.last_login_at, created: u.created_at })), requests: await openPasswordRequests(null) });
+}));
+A.post("/users", wrap(async (req, res) => {
+  const { username, password, name, role } = req.body || {};
+  const err = validateNewUser(username, password); if (err) return res.status(400).json({ error: err });
+  if (!ROLES.includes(role)) return res.status(400).json({ error: "Choose Owner, Manager or Staff." });
+  const em = cleanEmail(req.body?.email); if (em.error) return res.status(400).json({ error: em.error });
+  try {
+    const { rows } = await pool.query(`INSERT INTO users (username, name, email, pass_hash, role, must_change_password) VALUES ($1, $2, $3, $4, $5, true) RETURNING ${USER_COLS}`,
+      [username.trim().toLowerCase(), String(name || "").trim(), em.email, hashPassword(password), role]);
+    await adminLog(req, "Added a person", `${rows[0].username} (${role})`);
+    res.json({ user: publicUser(rows[0]) });
+  } catch (e) { if (e.code === "23505") return res.status(409).json({ error: "That username is taken." }); throw e; }
+}));
+async function adminUser(req, res) {
+  const u = (await pool.query("SELECT id, username, email, role FROM users WHERE id = $1", [Number(req.params.id)])).rows[0];
+  if (!u) res.status(404).json({ error: "That person no longer exists." });
+  return u;
+}
+A.post("/users/:id/reset-password", wrap(async (req, res) => {
+  const u = await adminUser(req, res); if (!u) return;
+  if (String(req.body?.password || "").length < 10) return res.status(400).json({ error: "Passwords need at least 10 characters." });
+  await pool.query("UPDATE users SET pass_hash = $1, must_change_password = true, session_version = session_version + 1 WHERE id = $2", [hashPassword(req.body.password), u.id]);
+  await closeRequests(u.id, req.adminName);
+  await adminLog(req, "Set a temporary password", u.username); res.json({ ok: true });
+}));
+A.post("/users/:id/reset-2fa", wrap(async (req, res) => {
+  const u = await adminUser(req, res); if (!u) return;
+  await pool.query("UPDATE users SET totp_enabled = false, totp_secret = NULL, totp_pending = NULL, recovery_codes = '[]', session_version = session_version + 1 WHERE id = $1", [u.id]);
+  await adminLog(req, "Reset two-step login", u.username); res.json({ ok: true });
+}));
+A.get("/password-requests", wrap(async (req, res) => res.json({ requests: await openPasswordRequests(null) })));
+A.post("/password-requests/:id/dismiss", wrap(async (req, res) => {
+  const r = (await pool.query("UPDATE password_requests SET status = 'dismissed', handled_by = $1, handled_at = now() WHERE id = $2 AND status = 'open' RETURNING user_id", [req.adminName, Number(req.params.id)])).rows[0];
+  if (!r) return res.status(404).json({ error: "That request was already handled." });
+  await adminLog(req, "Dismissed a password request"); res.json({ ok: true });
+}));
+A.patch("/users/:id", wrap(async (req, res) => {
+  const u = await adminUser(req, res); if (!u) return;
+  const { role } = req.body || {};
+  if (role !== undefined) {
+    if (!ROLES.includes(role)) return res.status(400).json({ error: "Invalid role." });
+    if (u.role === "owner" && role !== "owner" && await ownerCount() <= 1) return res.status(400).json({ error: "There has to be at least one owner." });
+    await pool.query("UPDATE users SET role = $1, session_version = session_version + (CASE WHEN role <> $1 THEN 1 ELSE 0 END) WHERE id = $2", [role, u.id]);
+    await adminLog(req, "Changed access", `${u.username} → ${role}`);
+  }
+  if (req.body?.email !== undefined) {
+    const em = cleanEmail(req.body.email); if (em.error) return res.status(400).json({ error: em.error });
+    await pool.query("UPDATE users SET email = $1 WHERE id = $2", [em.email, u.id]);
+    await adminLog(req, "Changed an email address", u.username);
+  }
+  res.json({ ok: true });
+}));
+A.get("/backup", wrap(async (req, res) => {
+  const data = await buildBackup(); await adminLog(req, "Downloaded a backup");
+  res.json(data);
+}));
+A.put("/notice", wrap(async (req, res) => {
+  const text = String(req.body?.text || "").trim().slice(0, 300);
+  const level = ["info", "warning"].includes(req.body?.level) ? req.body.level : "info";
+  await putSetting("notice", text ? { text, level, at: new Date().toISOString() } : {});
+  await adminLog(req, text ? "Posted a notice" : "Removed the notice", text); res.json({ ok: true });
+}));
+const THREAD_SQL = `SELECT t.*, u.username, u.name AS user_name, u.role,
+    (SELECT body FROM support_messages WHERE thread_id = t.id AND sender <> 'system' ORDER BY id DESC LIMIT 1) AS last_body,
+    (SELECT count(*)::int FROM support_messages WHERE thread_id = t.id AND sender = 'user' AND at > t.admin_read_at) AS unread
+  FROM support_threads t JOIN users u ON u.id = t.user_id`;
+const threadOut = t => ({ id: t.id, status: t.status, mode: t.mode, lastSender: t.last_sender, updatedAt: t.updated_at, createdAt: t.created_at,
+  user: { username: t.username, name: t.user_name, role: t.role }, preview: (t.last_body || "").slice(0, 140), unread: t.unread,
+  waiting: t.status === "open" && t.mode === "human" && t.last_sender !== "admin" });
+A.get("/chats", wrap(async (req, res) => {
+  const { rows } = await pool.query(`${THREAD_SQL} WHERE t.status = 'open' OR t.updated_at > now() - interval '14 days' ORDER BY t.updated_at DESC LIMIT 100`);
+  res.json({ chats: rows.map(threadOut), aiAvailable: aiAvailable() });
+}));
+A.get("/chats/:id", wrap(async (req, res) => {
+  const t = (await pool.query(`${THREAD_SQL} WHERE t.id = $1`, [Number(req.params.id)])).rows[0];
+  if (!t) return res.status(404).json({ error: "That chat no longer exists." });
+  await pool.query("UPDATE support_threads SET admin_read_at = now() WHERE id = $1", [t.id]);
+  res.json({ chat: threadOut(t), messages: await threadMessages(t.id) });
+}));
+A.post("/chats/:id/messages", wrap(async (req, res) => {
+  const body = String(req.body?.body || "").trim().slice(0, 4000);
+  if (!body) return res.status(400).json({ error: "Type a reply first." });
+  const t = (await pool.query("SELECT * FROM support_threads WHERE id = $1", [Number(req.params.id)])).rows[0];
+  if (!t) return res.status(404).json({ error: "That chat no longer exists." });
+  if (t.mode !== "human") await addMessage(t.id, "system", "", `${req.adminName} from ${SUPPORT_NAME} joined the chat.`);
+  await pool.query("UPDATE support_threads SET mode = 'human', status = 'open', admin_read_at = now() WHERE id = $1", [t.id]);
+  const m = await addMessage(t.id, "admin", req.adminName, body);
+  res.json({ message: m });
+}));
+A.post("/chats/:id/mode", wrap(async (req, res) => {
+  const mode = req.body?.mode === "ai" ? "ai" : "human";
+  if (mode === "ai" && !aiAvailable()) return res.status(400).json({ error: "The assistant isn’t set up on this app (ANTHROPIC_API_KEY)." });
+  const t = (await pool.query("UPDATE support_threads SET mode = $1, updated_at = now() WHERE id = $2 RETURNING *", [mode, Number(req.params.id)])).rows[0];
+  if (!t) return res.status(404).json({ error: "That chat no longer exists." });
+  await addMessage(t.id, "system", "", mode === "ai" ? "The assistant is answering again. Ask for a person any time." : `${req.adminName} from ${SUPPORT_NAME} joined the chat.`);
+  res.json({ ok: true });
+}));
+A.post("/chats/:id/close", wrap(async (req, res) => {
+  const t = (await pool.query("UPDATE support_threads SET status = 'closed', updated_at = now() WHERE id = $1 RETURNING *", [Number(req.params.id)])).rows[0];
+  if (!t) return res.status(404).json({ error: "That chat no longer exists." });
+  await addMessage(t.id, "system", "", `${req.adminName} closed the chat. Send a new message any time to start another.`);
+  res.json({ ok: true });
+}));
+A.get("/custom", wrap(async (req, res) => {
+  const st = await getSettings();
+  res.json({ custom: st.custom, options: { features: custom.FEATURES, labels: custom.LABELS, fieldTypes: custom.FIELD_TYPES, provinces: Object.keys(custom.PROVINCES) }, plugin: pluginInfo() });
+}));
+A.put("/custom", wrap(async (req, res) => {
+  const { custom: c, errors } = custom.clean(req.body?.custom);
+  if (errors.length) return res.status(400).json({ error: errors[0], errors });
+  await putSetting("custom", c);
+  const parts = [];
+  const off = Object.keys(c.features).filter(k => !c.features[k]); if (off.length) parts.push(`hidden: ${off.join(", ")}`);
+  if (Object.keys(c.labels).length) parts.push(`${Object.keys(c.labels).length} word changes`);
+  if (c.customerFields.length + c.jobFields.length) parts.push(`${c.customerFields.length + c.jobFields.length} custom fields`);
+  await adminLog(req, "Changed this business's customizations", parts.join("; ").slice(0, 300));
+  res.json({ custom: c });
+}));
+A.get("/log", wrap(async (req, res) => {
+  res.json({ log: (await pool.query("SELECT at, admin, action, detail FROM admin_log ORDER BY id DESC LIMIT 100")).rows });
+}));
+app.use("/api/admin/v1", A);
+// The business owner can see whether support access is on, and everything done through it.
+app.get("/api/support-log", auth, allow("owner"), wrap(async (req, res) => {
+  res.json({ enabled: adminEnabled(), log: (await pool.query("SELECT at, admin, action, detail FROM admin_log ORDER BY id DESC LIMIT 50")).rows });
+}));
+
 /* ---------- team (owner manages) ---------- */
 async function ownerCount() { return (await pool.query("SELECT count(*)::int AS n FROM users WHERE role = 'owner'")).rows[0].n; }
 
-app.get("/api/users", auth, allow("owner"), wrap(async (req, res) => {
-  const { rows } = await pool.query("SELECT id, username, name, email, role, totp_enabled FROM users ORDER BY username");
-  res.json({ users: rows.map(publicUser) });
+app.get("/api/users", auth, managers, wrap(async (req, res) => {
+  const { rows } = await pool.query("SELECT id, username, name, email, role, totp_enabled, must_change_password, last_login_at FROM users ORDER BY username");
+  res.json({ users: rows.map(u => ({ ...publicUser(u), lastLogin: u.last_login_at, canManage: u.id !== req.user.id && canManage(req.user, u) })), requests: await openPasswordRequests(req.user) });
 }));
-app.post("/api/users", auth, allow("owner"), wrap(async (req, res) => {
+app.post("/api/users", auth, managers, wrap(async (req, res) => {
   const { username, password, name, role } = req.body || {};
   const err = validateNewUser(username, password);
   if (err) return res.status(400).json({ error: err });
   if (!ROLES.includes(role)) return res.status(400).json({ error: "Choose what this person can do." });
+  if (req.user.role === "manager" && role !== "staff") return res.status(403).json({ error: "Managers can add Staff. Ask an owner to add a Manager or Owner." });
   const em = cleanEmail(req.body?.email);
   if (em.error) return res.status(400).json({ error: em.error });
   try {
     const { rows } = await pool.query(
-      `INSERT INTO users (username, name, email, pass_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING ${USER_COLS}`,
+      `INSERT INTO users (username, name, email, pass_hash, role, must_change_password) VALUES ($1, $2, $3, $4, $5, true) RETURNING ${USER_COLS}`,
       [username.trim().toLowerCase(), String(name || "").trim(), em.email, hashPassword(password), role]);
     res.json({ user: publicUser(rows[0]) });
   } catch (e) {
@@ -1005,41 +1360,47 @@ app.post("/api/users", auth, allow("owner"), wrap(async (req, res) => {
     throw e;
   }
 }));
-app.patch("/api/users/:id", auth, allow("owner"), wrap(async (req, res) => {
+async function teamTarget(req, res) {
   const id = Number(req.params.id);
+  const t = (await pool.query("SELECT id, username, role FROM users WHERE id = $1", [id])).rows[0];
+  if (!t) { res.status(404).json({ error: "That person no longer exists." }); return null; }
+  if (t.id === req.user.id) { res.status(400).json({ error: "Use Account → Change your password for your own account." }); return null; }
+  if (!canManage(req.user, t)) { res.status(403).json({ error: "Managers can only manage Staff. Ask an owner." }); return null; }
+  return t;
+}
+app.patch("/api/users/:id", auth, managers, wrap(async (req, res) => {
+  const t = await teamTarget(req, res); if (!t) return;
   const { role, name } = req.body || {};
   if (role !== undefined) {
+    if (req.user.role !== "owner") return res.status(403).json({ error: "Only an owner can change someone’s access." });
     if (!ROLES.includes(role)) return res.status(400).json({ error: "Invalid role." });
-    const cur = (await pool.query("SELECT role FROM users WHERE id = $1", [id])).rows[0];
-    if (!cur) return res.status(404).json({ error: "Not found." });
-    if (cur.role === "owner" && role !== "owner" && await ownerCount() <= 1) return res.status(400).json({ error: "There has to be at least one owner." });
-    await pool.query("UPDATE users SET role = $1, session_version = session_version + (CASE WHEN role <> $1 THEN 1 ELSE 0 END) WHERE id = $2", [role, id]);
+    if (t.role === "owner" && role !== "owner" && await ownerCount() <= 1) return res.status(400).json({ error: "There has to be at least one owner." });
+    await pool.query("UPDATE users SET role = $1, session_version = session_version + (CASE WHEN role <> $1 THEN 1 ELSE 0 END) WHERE id = $2", [role, t.id]);
   }
-  if (name !== undefined) await pool.query("UPDATE users SET name = $1 WHERE id = $2", [String(name).trim().slice(0, 60), id]);
+  if (name !== undefined) await pool.query("UPDATE users SET name = $1 WHERE id = $2", [String(name).trim().slice(0, 60), t.id]);
   if (req.body?.email !== undefined) {
     const em = cleanEmail(req.body.email);
     if (em.error) return res.status(400).json({ error: em.error });
-    await pool.query("UPDATE users SET email = $1 WHERE id = $2", [em.email, id]);
+    await pool.query("UPDATE users SET email = $1 WHERE id = $2", [em.email, t.id]);
   }
   res.json({ ok: true });
 }));
-app.post("/api/users/:id/reset-2fa", auth, allow("owner"), wrap(async (req, res) => {
-  const id = Number(req.params.id);
-  await pool.query("UPDATE users SET totp_enabled = false, totp_secret = NULL, totp_pending = NULL, recovery_codes = '[]', session_version = session_version + 1 WHERE id = $1", [id]);
+app.post("/api/users/:id/reset-2fa", auth, managers, wrap(async (req, res) => {
+  const t = await teamTarget(req, res); if (!t) return;
+  await pool.query("UPDATE users SET totp_enabled = false, totp_secret = NULL, totp_pending = NULL, recovery_codes = '[]', session_version = session_version + 1 WHERE id = $1", [t.id]);
   res.json({ ok: true });
 }));
-app.post("/api/users/:id/reset-password", auth, allow("owner"), wrap(async (req, res) => {
-  const id = Number(req.params.id);
+app.post("/api/users/:id/reset-password", auth, managers, wrap(async (req, res) => {
+  const t = await teamTarget(req, res); if (!t) return;
   if (String(req.body?.password || "").length < 10) return res.status(400).json({ error: "Passwords need at least 10 characters." });
-  await pool.query("UPDATE users SET pass_hash = $1, session_version = session_version + 1 WHERE id = $2", [hashPassword(req.body.password), id]);
+  await pool.query("UPDATE users SET pass_hash = $1, must_change_password = true, session_version = session_version + 1 WHERE id = $2", [hashPassword(req.body.password), t.id]);
+  await closeRequests(t.id, req.user.name || req.user.username);
   res.json({ ok: true });
 }));
-app.delete("/api/users/:id", auth, allow("owner"), wrap(async (req, res) => {
-  const id = Number(req.params.id);
-  if (id === req.user.id) return res.status(400).json({ error: "You can’t remove your own account." });
-  const cur = (await pool.query("SELECT role FROM users WHERE id = $1", [id])).rows[0];
-  if (cur?.role === "owner" && await ownerCount() <= 1) return res.status(400).json({ error: "There has to be at least one owner." });
-  await pool.query("DELETE FROM users WHERE id = $1", [id]);
+app.delete("/api/users/:id", auth, managers, wrap(async (req, res) => {
+  const t = await teamTarget(req, res); if (!t) return;
+  if (t.role === "owner" && await ownerCount() <= 1) return res.status(400).json({ error: "There has to be at least one owner." });
+  await pool.query("DELETE FROM users WHERE id = $1", [t.id]);
   res.json({ ok: true });
 }));
 
@@ -1048,7 +1409,9 @@ app.post("/api/password", auth, wrap(async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
   if (!checkPassword(String(current || ""), rows[0].pass_hash)) return res.status(400).json({ error: "Your current password is wrong." });
   if (String(newPw || "").length < 10) return res.status(400).json({ error: "Passwords need at least 10 characters." });
-  const upd = await pool.query("UPDATE users SET pass_hash = $1, session_version = session_version + 1 WHERE id = $2 RETURNING *", [hashPassword(newPw), req.user.id]);
+  if (checkPassword(String(newPw), rows[0].pass_hash)) return res.status(400).json({ error: "Choose a password that’s different from the temporary one." });
+  const upd = await pool.query("UPDATE users SET pass_hash = $1, must_change_password = false, session_version = session_version + 1 WHERE id = $2 RETURNING *", [hashPassword(newPw), req.user.id]);
+  await closeRequests(req.user.id, "Changed by the person");
   setSession(res, upd.rows[0]);
   res.json({ ok: true });
 }));
@@ -1060,6 +1423,39 @@ app.get("/manifest.webmanifest", wrap(async (req, res) => {
   res.setHeader("Content-Type", "application/manifest+json");
   res.json({ ...base, name, short_name: name.length > 14 ? (name.split(/\s+/)[0] || name).slice(0, 14) : name, description: `Scheduling and service reports for ${name}.` });
 }));
+/* ---------- per-customer custom code (custom/<FIELORA_CUSTOM>/) ---------- */
+// One codebase for every customer. A customer-only feature lives in its own folder and loads only on the
+// app whose Render settings say FIELORA_CUSTOM=<that folder>. See custom/README.md.
+const PLUGIN_ID = (process.env.FIELORA_CUSTOM || "").trim().toLowerCase();
+const PLUGIN_DIR = /^[a-z0-9][a-z0-9-]{0,40}$/.test(PLUGIN_ID) ? path.join(__dirname, "custom", PLUGIN_ID) : null;
+let pluginMeta = null;
+function pluginInfo() { return PLUGIN_ID ? { id: PLUGIN_ID, loaded: !!pluginMeta && !pluginMeta.error, name: pluginMeta?.name || PLUGIN_ID, version: pluginMeta?.version || "", error: pluginMeta?.error || (PLUGIN_DIR ? undefined : "Invalid FIELORA_CUSTOM name") } : null; }
+if (PLUGIN_DIR) {
+  const fs = require("fs");
+  if (!fs.existsSync(PLUGIN_DIR)) { pluginMeta = { error: `custom/${PLUGIN_ID} doesn’t exist` }; console.error(`FIELORA_CUSTOM=${PLUGIN_ID} but custom/${PLUGIN_ID} doesn’t exist`); }
+  else {
+    try {
+      const serverFile = path.join(PLUGIN_DIR, "server.js");
+      const mod = fs.existsSync(serverFile) ? require(serverFile) : {};
+      pluginMeta = { name: mod.name || PLUGIN_ID, version: mod.version || "" };
+      if (typeof mod.register === "function") mod.register({ app, pool, auth, allow, workers, wrap, getSettings, putSetting, adminRouter: A, adminLog, express });
+      console.log(`Custom code loaded: custom/${PLUGIN_ID}`);
+    } catch (e) { pluginMeta = { error: e.message }; console.error(`Custom code custom/${PLUGIN_ID} failed to load:`, e); }
+  }
+}
+app.get("/custom.js", (req, res) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8"); res.setHeader("Cache-Control", "no-cache");
+  const f = PLUGIN_DIR && pluginMeta && !pluginMeta.error ? path.join(PLUGIN_DIR, "client.js") : null;
+  if (f && require("fs").existsSync(f)) return res.sendFile(f);
+  res.send("/* no custom code for this app */");
+});
+app.get("/custom.css", (req, res) => {
+  res.setHeader("Content-Type", "text/css; charset=utf-8"); res.setHeader("Cache-Control", "no-cache");
+  const f = PLUGIN_DIR && pluginMeta && !pluginMeta.error ? path.join(PLUGIN_DIR, "client.css") : null;
+  if (f && require("fs").existsSync(f)) return res.sendFile(f);
+  res.send("/* no custom styles */");
+});
+
 app.use("/vendor/leaflet", express.static(path.join(__dirname, "node_modules", "leaflet", "dist"), { maxAge: "7d" }));
 app.use(express.static(path.join(__dirname, "public"), { index: "index.html", maxAge: 0 }));
 app.get("*", (req, res, next) => req.path.startsWith("/api") ? next() : res.sendFile(path.join(__dirname, "public", "index.html")));

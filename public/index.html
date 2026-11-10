@@ -317,6 +317,25 @@ dialog .dlg-foot{position:sticky;bottom:0;background:var(--surface);z-index:2}
 .pw-toggle svg{width:20px;height:20px}
 .brand{min-width:0;flex:1}
 .brand img{height:34px;max-width:140px;object-fit:contain;background:#fff;border-radius:6px;padding:2px 4px;align-self:center}
+.custom-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}.custom-grid .cf-full{grid-column:1/-1}.custom-grid label{display:block;font-weight:700;font-size:13px;margin-bottom:4px}
+body.off-map [data-view=map],body.off-due [data-view=due],body.off-shop [data-view=shop],body.off-import #importBtn,body.off-map [data-planfrom]{display:none!important}
+.help-btn{position:relative}.help-dot{position:absolute;top:4px;right:4px;width:10px;height:10px;border-radius:50%;background:#E5484D;border:2px solid #1D2125}
+.chat-dlg{width:min(520px,96vw);height:min(720px,92vh);padding:0;display:none;flex-direction:column}.chat-dlg[open]{display:flex}
+.chat-status{margin:0;padding:8px 16px;font-size:13px;color:#555C62;background:#F3F2EC;border-bottom:1px solid #E2E3DD}
+.chat-log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:#FAFAF7}
+.msg{max-width:86%;padding:9px 12px;border-radius:14px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word;font-size:15px}
+.msg .who{display:block;font-size:11px;font-weight:700;letter-spacing:.3px;margin-bottom:3px;opacity:.75;text-transform:uppercase}
+.msg.user{align-self:flex-end;background:#F4C20D;color:#1D2125;border-bottom-right-radius:4px}
+.msg.ai{align-self:flex-start;background:#fff;border:1px solid #E2E3DD;border-bottom-left-radius:4px}
+.msg.admin{align-self:flex-start;background:#E3F2F6;border:1px solid #BFDDE6;border-bottom-left-radius:4px}
+.msg.system{align-self:center;background:none;color:#555C62;font-size:13px;text-align:center;max-width:94%;padding:2px 8px}
+.msg.typing{color:#555C62;font-style:italic}
+.chat-suggest{display:flex;flex-wrap:wrap;gap:6px;padding:0 16px 8px;background:#FAFAF7}.chat-suggest button{border:1px solid #D9DCD6;background:#fff;border-radius:16px;padding:6px 11px;font:inherit;font-size:13px;cursor:pointer;min-height:0}
+.chat-form{display:flex;gap:8px;padding:10px 16px;border-top:1px solid #E2E3DD;background:#fff}.chat-form textarea{flex:1;resize:none;min-height:44px;max-height:120px}
+.chat-foot{display:flex;justify-content:space-between;gap:12px;padding:0 16px 4px;background:#fff}.msg b{font-weight:700}
+@media (max-width:440px){.help-txt{display:none}.help-btn::before{content:"?";font-weight:800}}.chat-privacy{margin:0;padding:0 16px 10px;font-size:11px;color:#7A8187;background:#fff}
+.notice-bar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:#E7F3F7;color:#0B4A5C;border-bottom:1px solid #BFDDE6;font-weight:600}.notice-bar.warning{background:#FFF4C2;color:#5C4600;border-color:#EBD98A}.notice-bar span{flex:1}.notice-bar .x{min-height:0;padding:2px 8px}
+.support-log{list-style:none;margin:8px 0 0;padding:0;max-height:220px;overflow:auto}.support-log li{padding:8px 0;border-top:1px solid var(--line,#e2e4df);font-size:14px}
 .forgot-row{margin:-6px 0 4px;grid-column:1/-1}.linkbtn{background:none;border:0;padding:4px 0;color:#0E7490;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer;min-height:0}.linkbtn:hover{color:#0b5d73}
 .brand b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
 @media (max-width:560px){.brand img:not([hidden]) ~ b,.brand img:not([hidden]) ~ small{display:none}.brand img{height:38px;max-width:150px}}
@@ -336,25 +355,33 @@ dialog .dlg-foot{position:sticky;bottom:0;background:var(--surface);z-index:2}
 .kbd{display:inline-block;border:1px solid var(--line);background:var(--sunk);border-radius:4px;padding:0 6px;font-weight:600;white-space:nowrap}
 .share-ico{display:inline-block;width:16px;height:18px;vertical-align:-3px}
 body:not(.role-owner) .owner-only{display:none !important}
+body.role-staff .mgr-only,body.role-staff [data-book],body.role-staff [data-bookany],body.role-staff #pBook,body.role-staff .field-row:has(#pBookDate),body.role-staff [data-stage],body.role-staff #newCustBtn,body.role-staff #importBtn,body.role-staff #fEditAgain,body.role-staff #jFormDelete{display:none !important}
+#jobDlg.personal-only #jType label:not(:has(input[value=personal])){display:none}
+.acct-btn-dot{position:relative}.acct-btn-dot::after{content:"";position:absolute;top:4px;right:4px;width:10px;height:10px;border-radius:50%;background:#E5484D;border:2px solid #1D2125}
+.pwreq{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin:0 0 8px;background:#FFF4C2;border:1px solid #EBD98A;border-radius:10px}.pwreq .grow{flex:1;min-width:180px}
 </style>
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/custom.css">
+<style id="customCss"></style>
 </head>
 <body>
 <header>
   <div class="bar">
     <div class="brand"><img id="brandLogo" alt="" hidden><b id="brandName">Fielora</b><small>Job scheduler</small></div>
-    <button class="btn primary" id="newJobBtn">New job</button>
+    <button class="btn primary" id="newJobBtn" data-l="newJob">New job</button>
     <button class="btn acct" id="installBtn" hidden>Install app</button>
+    <button class="btn acct help-btn" id="helpBtn" hidden aria-label="Help"><span class="help-txt">Help</span><span class="help-dot" id="helpDot" hidden></span></button>
     <button class="btn acct" id="acctBtn">Account</button>
   </div>
   <nav class="tabs" role="tablist">
-    <button role="tab" data-view="schedule" aria-selected="true">Schedule</button>
-    <button role="tab" data-view="map" aria-selected="false" class="work-only">Map</button>
-    <button role="tab" data-view="due" aria-selected="false" class="work-only">Maintenance due<span class="count" id="dueCount" hidden></span></button>
+    <button role="tab" data-view="schedule" aria-selected="true"><span data-l="schedule">Schedule</span></button>
+    <button role="tab" data-view="map" aria-selected="false" class="work-only"><span data-l="map">Map</span></button>
+    <button role="tab" data-view="due" aria-selected="false" class="work-only"><span data-l="due">Maintenance due</span><span class="count" id="dueCount" hidden></span></button>
     <button role="tab" data-view="shop" aria-selected="false" class="work-only" id="shopTab"><span id="shopTabLabel">Shop</span><span class="count" id="shopCount" hidden></span></button>
-    <button role="tab" data-view="customers" aria-selected="false" class="work-only">Customers</button>
+    <button role="tab" data-view="customers" aria-selected="false" class="work-only"><span data-l="customers">Customers</span></button>
   </nav>
 </header>
+<div id="noticeBar" class="notice-bar" role="status" hidden><span id="noticeText"></span><button type="button" class="x" id="noticeClose" aria-label="Hide this notice">×</button></div>
 
 <main>
   <p class="status-line" id="storeStatus"></p>
@@ -407,7 +434,7 @@ body:not(.role-owner) .owner-only{display:none !important}
   </section>
 
   <section class="view" id="view-due" hidden>
-    <div class="toolbar"><h1>Maintenance due</h1></div>
+    <div class="toolbar"><h1 data-l="due">Maintenance due</h1></div>
     <div id="dueList"></div>
   </section>
 
@@ -418,7 +445,7 @@ body:not(.role-owner) .owner-only{display:none !important}
 
   <section class="view" id="view-customers" hidden>
     <div class="toolbar">
-      <h1>Customers</h1>
+      <h1 data-l="customers">Customers</h1>
       <input type="search" id="custSearch" placeholder="Search name, town, model" aria-label="Search customers">
       <button class="btn ghost" id="importBtn">Import</button>
       <button class="btn primary" id="newCustBtn">Add customer</button>
@@ -457,6 +484,7 @@ body:not(.role-owner) .owner-only{display:none !important}
         <select id="jPriority"><option value="normal">Normal</option><option value="outage">Power outage — urgent</option></select>
       </div>
       <div class="field full"><label for="jNotes" id="jNotesLabel">What’s the job?</label><textarea id="jNotes" placeholder="Symptoms, parts to bring, gate code…"></textarea></div>
+      <div class="field full custom-box" id="jCustom" hidden><h3 class="sub-h">More details</h3><div class="custom-grid" id="jCustomGrid"></div></div>
       <div class="field" id="jStatusWrap" hidden>
         <label for="jStatus">Status</label>
         <select id="jStatus"><option value="booked">Booked</option><option value="parts">Waiting on parts</option><option value="done">Done</option><option value="cancelled">Cancelled</option></select>
@@ -469,6 +497,7 @@ body:not(.role-owner) .owner-only{display:none !important}
         <div class="grow"><b>Service form</b><br><span id="jFormStatus" class="hint"></span></div>
         <button type="button" class="btn primary" id="jFormBtn">Open service form</button>
         <a class="btn ghost" id="jPdfLink" target="_blank" rel="noopener" hidden style="text-decoration:none">View PDF</a>
+        <button type="button" class="btn danger mgr-only" id="jFormDelete" hidden>Delete form</button>
       </div>
       <div class="field full" id="jReportWrap" hidden>
         <label for="jReport">Internal notes</label>
@@ -540,6 +569,7 @@ body:not(.role-owner) .owner-only{display:none !important}
       </div>
       <div class="field"><label for="cLast">Last serviced</label><input id="cLast" type="date"><span class="hint">Updates when a maintenance form is finished.</span></div>
       <div class="field full"><label for="cNotes">Notes</label><textarea id="cNotes" placeholder="Access, gate code, dog on site…"></textarea></div>
+      <div class="field full custom-box" id="cCustom" hidden><h3 class="sub-h">More details</h3><div class="custom-grid" id="cCustomGrid"></div></div>
       <h3 class="sub-h" id="cExtraTitle" hidden>Other details</h3>
       <dl class="extra-list" id="cExtra" hidden></dl>
       <h3 class="sub-h" id="cHistTitle" hidden>Service history</h3>
@@ -564,7 +594,7 @@ body:not(.role-owner) .owner-only{display:none !important}
       <div class="field full setup-only" hidden><label for="aInd">Your trade</label><select id="aInd"></select><span class="hint">Sets up job types, equipment details and service forms for your trade. You can change everything later.</span></div>
       <div class="field full setup-only" hidden><label for="aTown">Home base town</label><input id="aTown" placeholder="Where trips start, e.g. Goderich, ON"></div>
       <div class="field full" id="aNameWrap" hidden><label for="aName">Your name</label><input id="aName" autocomplete="name"></div>
-      <div class="field full setup-only" hidden><label for="aEmail">Your email</label><input id="aEmail" type="email" autocomplete="email" autocapitalize="none"><span class="hint">Used to send you a link if you ever forget your password.</span></div>
+      <div class="field full setup-only" hidden><label for="aEmail">Your email</label><input id="aEmail" type="email" autocomplete="email" autocapitalize="none"><span class="hint">Optional. Helps your team and support reach you.</span></div>
       <div class="field full" id="aUserWrap"><label for="aUser">Username</label><input id="aUser" autocomplete="username" autocapitalize="none"></div>
       <div class="field full" id="aPassWrap"><label for="aPass">Password</label><input id="aPass" type="password" autocomplete="current-password"><span class="hint">At least 10 characters.</span></div>
       <p class="forgot-row" id="aForgotRow" hidden><button type="button" class="linkbtn" id="aForgot">Forgot password?</button></p>
@@ -573,13 +603,40 @@ body:not(.role-owner) .owner-only{display:none !important}
         <input id="aCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456">
         <span class="hint">Lost your phone? Enter one of your recovery codes instead (like 3f9a2-c81d4).</span>
       </div>
-      <div class="field full" id="aIdWrap" hidden><label for="aId">Username or email</label><input id="aId" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
-      <div class="field full" id="aNewWrap" hidden><label for="aNew">New password</label><input id="aNew" type="password" autocomplete="new-password"><span class="hint">At least 10 characters.</span></div>
-      <div class="field full" id="aNew2Wrap" hidden><label for="aNew2">Type it again</label><input id="aNew2" type="password" autocomplete="new-password"></div>
+      <div class="field full" id="aIdWrap" hidden><label for="aId">Username</label><input id="aId" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
       <p class="err" id="aError" role="alert"></p>
     </div>
     <div class="dlg-foot"><button type="button" class="btn ghost" id="aBack" hidden>Back</button><span class="spacer"></span><button type="submit" class="btn primary" id="aSubmit">Sign in</button></div>
   </form>
+</dialog>
+
+<!-- Choose a new password (after a temporary one) -->
+<dialog id="mustDlg" aria-labelledby="mustTitle">
+  <form id="mustForm">
+    <div class="dlg-head"><h2 id="mustTitle">Choose your own password</h2></div>
+    <div class="dlg-body">
+      <p class="auth-intro">You signed in with a temporary password. Choose your own password to continue. Only you will know it.</p>
+      <div class="field full"><label for="mCur">Temporary password</label><input id="mCur" type="password" required autocomplete="current-password"></div>
+      <div class="field full"><label for="mNew">New password</label><input id="mNew" type="password" required autocomplete="new-password"><span class="hint">At least 10 characters.</span></div>
+      <div class="field full"><label for="mNew2">Type it again</label><input id="mNew2" type="password" required autocomplete="new-password"></div>
+      <p class="err" id="mErr" role="alert"></p>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="mLogout">Sign out</button><span class="spacer"></span><button type="submit" class="btn primary">Save my password</button></div>
+  </form>
+</dialog>
+
+<!-- Help chat -->
+<dialog id="chatDlg" aria-labelledby="chatTitle" class="chat-dlg">
+  <div class="dlg-head"><h2 id="chatTitle">Help</h2><button type="button" class="x" id="chatClose" aria-label="Close">×</button></div>
+  <p class="chat-status" id="chatStatus"></p>
+  <div class="chat-log" id="chatLog" aria-live="polite"></div>
+  <div class="chat-suggest" id="chatSuggest"></div>
+  <form id="chatForm" class="chat-form">
+    <textarea id="chatInput" rows="2" maxlength="2000" placeholder="Ask how to do something in Fielora…" aria-label="Your message"></textarea>
+    <button type="submit" class="btn primary" id="chatSend">Send</button>
+  </form>
+  <div class="chat-foot"><button type="button" class="linkbtn" id="chatHuman">Talk to a person</button><span class="spacer"></span><button type="button" class="linkbtn" id="chatEnd">End chat</button></div>
+  <p class="chat-privacy" id="chatPrivacy"></p>
 </dialog>
 
 <!-- Account dialog -->
@@ -620,17 +677,18 @@ body:not(.role-owner) .owner-only{display:none !important}
     </form>
   </section>
 
-  <section class="acct-sec not-forced owner-only">
+  <section class="acct-sec not-forced mgr-only">
     <h3>Team</h3>
+    <div id="pwRequests"></div>
     <div id="teamList"></div>
     <form id="addUserForm">
       <div class="field"><label for="tName">Name</label><input id="tName" required></div>
       <div class="field"><label for="tUser">Username</label><input id="tUser" required autocapitalize="none" autocomplete="off"></div>
-      <div class="field"><label for="tEmail">Email <span class="hint">(optional, for password resets)</span></label><input id="tEmail" type="email" autocapitalize="none" autocomplete="off"></div>
+      <div class="field"><label for="tEmail">Email <span class="hint">(optional)</span></label><input id="tEmail" type="email" autocapitalize="none" autocomplete="off"></div>
       <div class="field"><label for="tPass">Temporary password</label><input id="tPass" type="password" required autocomplete="new-password"></div>
       <div class="field"><label for="tRole">Access</label>
-        <select id="tRole"><option value="staff">Staff — full scheduling</option><option value="owner">Owner — everything</option></select></div>
-      <div class="field full"><span class="hint"><b>Staff</b> can manage jobs, customers, service forms and personal time. <b>Owners</b> can also manage the team, service form designs and settings.</span></div>
+        <select id="tRole"><option value="staff">Staff</option><option value="manager" class="owner-only">Manager</option><option value="owner" class="owner-only">Owner</option></select></div>
+      <div class="field full"><span class="hint"><b>Staff</b> see the schedule, customers and map, fill in service forms, and add their own personal time. <b>Managers</b> can also add, change and delete jobs and customers, set up service forms, import and export, and help Staff with passwords. <b>Owners</b> can do everything, including business settings and managing Managers. New people choose their own password the first time they sign in.</span></div>
       <div class="field"><button type="submit" class="btn primary">Add person</button></div>
       <p class="err" id="tError" role="alert"></p>
     </form>
@@ -675,7 +733,7 @@ body:not(.role-owner) .owner-only{display:none !important}
     <p class="hint" id="mailStatus" style="margin:0"></p>
   </section>
 
-  <section class="acct-sec not-forced owner-only">
+  <section class="acct-sec not-forced mgr-only">
     <h3>Service forms and logo</h3>
     <div class="logo-row">
       <div class="logo-box" id="logoBox"><span class="hint">No logo</span></div>
@@ -691,7 +749,7 @@ body:not(.role-owner) .owner-only{display:none !important}
     <button type="button" class="btn primary" id="fbOpen">Customize service forms</button>
   </section>
 
-  <section class="acct-sec not-forced work-only">
+  <section class="acct-sec not-forced mgr-only">
     <h3>Export data</h3>
     <p class="hint" style="margin:0 0 10px">Download your information to keep, share with your accountant, or move to another system.</p>
     <div class="export-list">
@@ -699,6 +757,10 @@ body:not(.role-owner) .owner-only{display:none !important}
       <a class="btn ghost" href="/api/export/reports.zip" download id="zipLink">All service reports (PDF)</a><span class="hint">Every report as a PDF, in a folder per customer, in one zip file.</span>
       <a class="btn ghost" href="/api/export" download>Full backup</a><span class="hint">Everything, including settings and form designs, in one file for safekeeping.</span>
     </div>
+  </section>
+  <section class="acct-sec not-forced owner-only">
+    <h3>Support access</h3>
+    <div id="supportBody"><p class="hint">Loading…</p></div>
   </section>
   <div class="dlg-foot"><span class="spacer"></span><button type="button" class="btn danger" id="logoutBtn">Sign out</button></div>
 </dialog>
@@ -744,5 +806,6 @@ body:not(.role-owner) .owner-only{display:none !important}
 
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/app.js"></script>
+<script src="/custom.js" defer></script>
 </body>
 </html>

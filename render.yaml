@@ -39,6 +39,15 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
-      # Optional: only needed if you use your own web address. Password reset links use it.
-      - key: APP_URL
+      # Optional: turns on support access from the Fielora Admin dashboard. Paste the key it gives you.
+      - key: ADMIN_API_KEY
+        sync: false
+      # Optional: turns on the AI assistant in the Help chat (an Anthropic API key).
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Optional: the support team name shown in the Help chat, e.g. "Helm Support".
+      - key: SUPPORT_NAME
+        sync: false
+      # Optional: loads customer-only code from custom/<name>/ (see custom/README.md). Leave blank for most customers.
+      - key: FIELORA_CUSTOM
         sync: false
