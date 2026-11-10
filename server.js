@@ -1465,6 +1465,21 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Something went wrong on the server. Try again." });
 });
 
-migrate()
+// Waits for the database before starting. On Render the database can still be starting
+// (or restarting) when the app boots; retry for about two minutes with a clear log message.
+async function waitForDatabase(tries = 24) {
+  for (let i = 1; ; i++) {
+    try { await pool.query("SELECT 1"); return; }
+    catch (e) {
+      const hint = e.code === "ECONNREFUSED" || e.code === "ENOTFOUND" || e.code === "ETIMEDOUT"
+        ? "The database isn’t reachable yet. If this keeps happening, check that the database shows Available, is in the same Render region as this service, and that DATABASE_URL is its Internal Database URL."
+        : e.message;
+      if (i >= tries) throw new Error(`Couldn’t connect to the database after ${tries} tries. ${hint}`);
+      console.log(`Waiting for the database (try ${i} of ${tries}): ${e.code || e.message}. ${i === 1 ? hint : ""}`);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+waitForDatabase().then(migrate)
   .then(() => app.listen(PORT, "0.0.0.0", () => console.log(`Fielora listening on ${PORT}`)))
   .catch(e => { console.error("Database setup failed:", e); process.exit(1); });
