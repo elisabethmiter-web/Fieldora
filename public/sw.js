@@ -1,8 +1,8 @@
-/* Field Service Scheduler service worker.
+/* Fielora service worker.
    Keeps the app itself (page, script, map library, icons) on the device so it opens
    instantly from the home screen. Customer and job data is never stored here: every
    /api request goes straight to the server. */
-const VERSION = "fieldservice-v1";
+const VERSION = "fielora-v1";
 const SHELL = ["/", "/app.js", "/manifest.webmanifest", "/vendor/leaflet/leaflet.js", "/vendor/leaflet/leaflet.css",
   "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/favicon.svg"];
 

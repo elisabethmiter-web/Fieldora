@@ -1,8 +1,8 @@
 {
-  "name": "fieldservice-scheduler",
+  "name": "fielora",
   "version": "1.0.0",
   "private": true,
-  "description": "Job scheduler and service reports for field service businesses",
+  "description": "Fielora — scheduling and service reports for field service businesses",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

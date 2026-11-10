@@ -50,7 +50,7 @@ const loc = c => ({ lat:Number(c.lat), lng:Number(c.lng) });
 /* ---------- trade (industry) ---------- */
 const IND = () => state.industry || { equipment:"Equipment", sizeUnit:"", fuels:[], equipmentTypes:[], brands:[], jobTypes:{ pm:{label:"Maintenance",on:true}, repair:{label:"Service call",on:true}, install:{label:"Installation",on:true}, assess:{label:"Estimate",on:true}, shop:{label:"Shop repair",on:false,board:"Shop repairs"} } };
 const eqLower = () => { const e = IND().equipment || "Equipment"; return e === e.toUpperCase() ? e : e.toLowerCase(); };
-const appName = () => state.settings?.business?.name || "Field Service Scheduler";
+const appName = () => state.settings?.business?.name || "Fielora";
 const shopOn = () => !!IND().jobTypes.shop?.on;
 const sizeTxt = c => c.kw ? `${c.kw}${IND().sizeUnit ? " " + IND().sizeUnit : ""}` : "";
 const enabledTypes = () => ["pm","repair","install","assess","portable"].filter(k => k === "portable" ? shopOn() : (IND().jobTypes[k]?.on !== false));
@@ -68,8 +68,8 @@ function applyIndustry(){
   $("#brands").innerHTML = IND().brands.map(b=>`<option value="${esc(b)}">`).join("");
   $("#etypes").innerHTML = IND().equipmentTypes.map(b=>`<option value="${esc(b)}">`).join("");
   const name = appName();
-  $("#brandName").textContent = state.settings?.business?.name || "Field Service";
-  document.title = `${name} · Scheduler`;
+  $("#brandName").textContent = state.settings?.business?.name || "Fielora";
+  document.title = state.settings?.business?.name ? `${name} · Fielora` : "Fielora";
   const logo = $("#brandLogo"); logo.hidden = !state.branding?.logo; if(state.branding?.logo) logo.src = `/api/branding/logo?v=${state.branding.v||1}`;
 }
 function fillTowns(){
@@ -85,7 +85,7 @@ const state = { customers:{}, jobs:{}, weekStart: mondayOf(new Date()), user:nul
 const isOwner = () => state.user?.role === "owner";
 
 async function api(method, url, body){
-  const opts = { method, headers:{ "X-Requested-With":"fieldservice" }, credentials:"same-origin" };
+  const opts = { method, headers:{ "X-Requested-With":"fielora" }, credentials:"same-origin" };
   if(body !== undefined){ opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
   let res;
   try{ res = await fetch(url, opts); }
@@ -152,7 +152,7 @@ function authStep(step){
   $("#aNameWrap").hidden = code || !needsSetup;
   document.querySelectorAll("#authDlg .setup-only").forEach(el=>el.hidden = code || !needsSetup);
   $("#aCodeWrap").hidden = !code; $("#aBack").hidden = !code;
-  $("#authTitle").textContent = code ? "Enter your code" : (needsSetup ? "Set up your scheduler" : "Sign in");
+  $("#authTitle").textContent = code ? "Enter your code" : (needsSetup ? "Set up Fielora" : "Sign in");
   $("#authIntro").textContent = code ? "Open your authenticator app and enter the 6-digit code for this app." : (needsSetup ? "Create the first account. You can add the rest of the team after." : "Sign in to see the schedule.");
   $("#aSubmit").textContent = code ? "Verify" : (needsSetup ? "Create account" : "Sign in");
   $("#aUser").required = !code; $("#aPass").required = !code; $("#aCode").required = code;
@@ -1277,7 +1277,7 @@ $("#fbPreview").addEventListener("click", async ()=>{
   $("#fbErr").textContent = "";
   const win = window.open("", "_blank");
   try{
-    const res = await fetch("/api/forms/preview", { method:"POST", credentials:"same-origin", headers:{ "X-Requested-With":"fieldservice", "Content-Type":"application/json" }, body:JSON.stringify({ template:fbTpl(), footer:fb.cfg.footer }) });
+    const res = await fetch("/api/forms/preview", { method:"POST", credentials:"same-origin", headers:{ "X-Requested-With":"fielora", "Content-Type":"application/json" }, body:JSON.stringify({ template:fbTpl(), footer:fb.cfg.footer }) });
     if(!res.ok){ const d = await res.json().catch(()=>({})); throw { error:d.error || "Couldn’t build the preview." }; }
     const url = URL.createObjectURL(await res.blob());
     if(win) win.location = url; else window.open(url, "_blank");
@@ -1482,7 +1482,7 @@ function renderInstallUI(){
   const sec = $("#installSec");
   if(sec) sec.innerHTML = standalone ? `<p style="margin:0"><span class="role-pill ok-pill">Installed</span> You’re using the app version.</p>`
     : `<p class="hint" style="margin:0 0 10px">Put the app on your home screen, Dock or taskbar so it opens like a normal app. Works on phones, tablets and computers.</p><button type="button" class="btn primary" data-showinstall>${installPrompt ? "Install app" : "Show me how"}</button>`;
-  let dismissed = false; try{ dismissed = localStorage.getItem("fs-install-dismissed") === "1"; }catch(e){}
+  let dismissed = false; try{ dismissed = localStorage.getItem("fielora-install-dismissed") === "1"; }catch(e){}
   $("#installTip").hidden = standalone || dismissed || !state.user || !(installPrompt || isPhoneOrTablet);
   $("#installTipBtn").textContent = installPrompt ? "Install" : "Show me";
 }
@@ -1498,7 +1498,7 @@ window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); installP
 window.addEventListener("appinstalled", ()=>{ installPrompt = null; toast("Installed. Open it from your home screen or apps."); renderInstallUI(); });
 $("#installBtn").addEventListener("click", doInstall);
 $("#installTipBtn").addEventListener("click", doInstall);
-$("#installTipClose").addEventListener("click", ()=>{ try{ localStorage.setItem("fs-install-dismissed","1"); }catch(e){} renderInstallUI(); });
+$("#installTipClose").addEventListener("click", ()=>{ try{ localStorage.setItem("fielora-install-dismissed","1"); }catch(e){} renderInstallUI(); });
 document.addEventListener("click", e=>{
   if(e.target.closest("[data-showinstall]")) doInstall();
   else if(e.target.closest("[data-doinstall]")) doInstall();

@@ -31,7 +31,7 @@ const pool = new Pool({
 const COLLECTIONS = new Set(["customers", "jobs"]);
 const ROLES = ["owner", "staff"];
 const SESSION_DAYS = 30;
-const COOKIE = "fs_session";
+const COOKIE = "fielora_session";
 // Fields on a job that only the maintenance-form endpoints may change.
 const PROTECTED_JOB_FIELDS = ["form", "formCompletedAt", "formSentAt", "formSentTo"];
 
@@ -202,7 +202,7 @@ app.use((req, res, next) => {
 function requireAjax(req, res, next) {
   // Lock release is sent by navigator.sendBeacon when a tab closes, which can't add headers.
   if (/^\/locks\/[a-z]+\/[a-z0-9]+\/release$/i.test(req.path)) return next();
-  if (req.method !== "GET" && req.get("X-Requested-With") !== "fieldservice") return res.status(403).json({ error: "Bad request origin." });
+  if (req.method !== "GET" && req.get("X-Requested-With") !== "fielora") return res.status(403).json({ error: "Bad request origin." });
   next();
 }
 app.use("/api", requireAjax);
@@ -342,7 +342,7 @@ app.post("/api/2fa/setup", auth, wrap(async (req, res) => {
   if (req.user.totp_enabled) return res.status(400).json({ error: "Two-step login is already on." });
   const secret = totp.newSecret();
   await pool.query("UPDATE users SET totp_pending = $1 WHERE id = $2", [encrypt(secret), req.user.id]);
-  const issuer = (req.settings.business.name || "Field Service").replace(/:/g, "");
+  const issuer = (req.settings.business.name || "Fielora").replace(/:/g, "");
   const url = totp.otpauthUrl(secret, req.user.username, issuer);
   const qr = await QRCode.toDataURL(url, { margin: 1, width: 220 });
   res.json({ secret: secret.replace(/(.{4})/g, "$1 ").trim(), qr });
@@ -432,7 +432,7 @@ app.get("/api/export", auth, workers, wrap(async (req, res) => {
     pool.query("SELECT id, data, updated_at FROM jobs ORDER BY id"),
   ]);
   const stamp = new Date().toISOString().slice(0, 10);
-  res.setHeader("Content-Disposition", `attachment; filename="field-service-backup-${stamp}.json"`);
+  res.setHeader("Content-Disposition", `attachment; filename="fielora-backup-${stamp}.json"`);
   const settings = (await pool.query("SELECT key, value FROM settings WHERE key <> 'require2fa'")).rows;
   res.json({ exportedAt: new Date().toISOString(), customers: c.rows, jobs: j.rows, settings });
 }));
@@ -447,7 +447,7 @@ function nominatim(q) {
     if (wait) await new Promise(r => setTimeout(r, wait));
     lastGeo = Date.now();
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=ca&q=${encodeURIComponent(q)}`;
-    const r = await fetch(url, { headers: { "User-Agent": "FieldServiceScheduler/1.0 (field service scheduling app)", "Accept-Language": "en-CA" } });
+    const r = await fetch(url, { headers: { "User-Agent": "Fielora/1.0 (field service scheduling app)", "Accept-Language": "en-CA" } });
     if (!r.ok) throw new Error(`Address lookup failed (${r.status})`);
     return r.json();
   };
@@ -704,7 +704,7 @@ function styleSheet(ws) {
 app.get("/api/export/workbook.xlsx", auth, workers, wrap(async (req, res) => {
   const [cr, jr] = await Promise.all([pool.query("SELECT id, data FROM customers"), pool.query("SELECT id, data FROM jobs")]);
   const customers = Object.fromEntries(cr.rows.map(r => [r.id, r.data]));
-  const wb = new ExcelJS.Workbook(); wb.creator = "Field Service Scheduler"; const TYPE_LABEL = typeLabels(req.settings), IND = req.settings.industry; wb.created = new Date();
+  const wb = new ExcelJS.Workbook(); wb.creator = "Fielora"; const TYPE_LABEL = typeLabels(req.settings), IND = req.settings.industry; wb.created = new Date();
   // Customers (with every extra detail as its own column)
   const extraKeys = [...new Set(cr.rows.flatMap(r => Object.keys(r.data.extra || {})))];
   const ws1 = wb.addWorksheet("Customers");
@@ -747,7 +747,7 @@ app.get("/api/export/workbook.xlsx", auth, workers, wrap(async (req, res) => {
     styleSheet(ws);
   }
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", `attachment; filename="field-service-export-${stamp()}.xlsx"`);
+  res.setHeader("Content-Disposition", `attachment; filename="fielora-export-${stamp()}.xlsx"`);
   await wb.xlsx.write(res); res.end();
 }));
 app.get("/api/export/reports.zip", auth, workers, wrap(async (req, res) => {
@@ -756,7 +756,7 @@ app.get("/api/export/reports.zip", auth, workers, wrap(async (req, res) => {
   if (!jr.rows.length) return res.status(404).json({ error: "There are no service forms to export yet." });
   const assets = await reportAssets(req.settings); const TYPE_LABEL = typeLabels(req.settings);
   res.setHeader("Content-Type", "application/zip");
-  res.setHeader("Content-Disposition", `attachment; filename="service-reports-${stamp()}.zip"`);
+  res.setHeader("Content-Disposition", `attachment; filename="fielora-service-reports-${stamp()}.zip"`);
   const zip = archiver("zip", { zlib: { level: 6 } });
   zip.on("error", e => { console.error(e); res.destroy(e); });
   zip.pipe(res);
@@ -953,7 +953,7 @@ app.post("/api/password", auth, wrap(async (req, res) => {
 
 /* ---------- static app ---------- */
 app.get("/manifest.webmanifest", wrap(async (req, res) => {
-  const st = await getSettings(); const name = st.business.name || "Field Service Scheduler";
+  const st = await getSettings(); const name = st.business.name || "Fielora";
   const base = JSON.parse(require("fs").readFileSync(path.join(__dirname, "public", "manifest.webmanifest"), "utf8"));
   res.setHeader("Content-Type", "application/manifest+json");
   res.json({ ...base, name, short_name: name.length > 14 ? (name.split(/\s+/)[0] || name).slice(0, 14) : name, description: `Scheduling and service reports for ${name}.` });
@@ -968,5 +968,5 @@ app.use((err, req, res, next) => {
 });
 
 migrate()
-  .then(() => app.listen(PORT, "0.0.0.0", () => console.log(`Field service scheduler listening on ${PORT}`)))
+  .then(() => app.listen(PORT, "0.0.0.0", () => console.log(`Fielora listening on ${PORT}`)))
   .catch(e => { console.error("Database setup failed:", e); process.exit(1); });

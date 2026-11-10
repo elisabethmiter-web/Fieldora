@@ -1,16 +1,16 @@
-# Render Blueprint for Field Service Scheduler
+# Render Blueprint for Fielora
 # Creates one web service (the app) and one PostgreSQL database.
 databases:
-  - name: fieldservice-db
+  - name: fielora-db
     plan: basic-256mb
     region: ohio
-    databaseName: fieldservice
-    user: fieldservice
+    databaseName: fielora
+    user: fielora
     postgresMajorVersion: "16"
 
 services:
   - type: web
-    name: fieldservice-scheduler
+    name: fielora
     runtime: node
     plan: starter
     region: ohio
@@ -25,7 +25,7 @@ services:
         value: "22"
       - key: DATABASE_URL
         fromDatabase:
-          name: fieldservice-db
+          name: fielora-db
           property: connectionString
       - key: SESSION_SECRET
         generateValue: true

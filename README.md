@@ -1,6 +1,6 @@
-# Field Service Scheduler
+# Fielora
 
-A scheduling and service-report app for field service businesses: equipment service, HVAC, plumbing, electrical, or any trade that visits customers to install, repair and maintain equipment. Built for use on a phone. Weekly schedule, personal time, a map with trip planning, maintenance plans coming due, customer and equipment records, digital service forms that email a PDF report through Outlook, SharePoint/Excel import, and exports. Runs on Render as one web service plus one PostgreSQL database.
+**Fielora** (pronounced *fee-LOR-uh*) is a scheduling and service-report app for field service businesses: generator service, HVAC, plumbing, electrical, or any trade that visits customers to install, repair and maintain equipment. Built for use on a phone. Weekly schedule, personal time, a map with trip planning, maintenance plans coming due, customer and equipment records, digital service forms that email a PDF report through Outlook, SharePoint/Excel import, and exports. Runs on Render as one web service plus one PostgreSQL database.
 
 Each business gets its own copy (its own Render app and database), set up for its trade on first sign-in.
 
@@ -47,7 +47,7 @@ The app installs straight from the browser. There's no app store, and every devi
 
 The installed app still needs an internet connection for data. Without signal it still opens and shows "Offline", and nothing is saved until the connection is back. Customer and job data is never stored in the app's offline copy; only the app itself is.
 
-**When releasing an update:** change `VERSION` at the top of `public/sw.js` (e.g. `fieldservice-v2`) so installed apps clear their old saved copy.
+**When releasing an update:** change `VERSION` at the top of `public/sw.js` (e.g. `fielora-v2`) so installed apps clear their old saved copy.
 
 ## Customize service forms and add your logo
 
@@ -205,7 +205,7 @@ The business name, phone, email and website on the report come from **Account �
 
 Until this is done, finished reports can still be opened, downloaded, or shared from a phone. Connecting it needs someone with admin rights to the business's Microsoft 365. It takes about 15 minutes.
 
-1. **Register the app.** Go to entra.microsoft.com → **Applications → App registrations → New registration**. Name it "Field Service Scheduler", keep the defaults, and click **Register**. Copy the **Application (client) ID** and the **Directory (tenant) ID** from the overview page.
+1. **Register the app.** Go to entra.microsoft.com → **Applications → App registrations → New registration**. Name it "Fielora", keep the defaults, and click **Register**. Copy the **Application (client) ID** and the **Directory (tenant) ID** from the overview page.
 2. **Allow it to send mail.** Open **API permissions → Add a permission → Microsoft Graph → Application permissions**, tick **Mail.Send**, and click **Add permissions**. Then click **Grant admin consent** and confirm.
 3. **Create a secret.** Open **Certificates & secrets → New client secret**, choose an expiry (24 months is the maximum), and copy the secret **Value** right away; it's only shown once. Put a reminder in the calendar to renew it before it expires.
 4. **Limit it to one mailbox (strongly recommended).** By default, Mail.Send lets the app send as any mailbox in the organisation. Restrict it to the business mailbox with an Exchange Online application access policy or RBAC for Applications. Microsoft's guide: search "Limiting application permissions to specific Exchange Online mailboxes."
@@ -245,7 +245,7 @@ Requires Node 22+ and a PostgreSQL database.
 
 ```bash
 npm install
-DATABASE_URL=postgres://user:pass@localhost:5432/fieldservice SESSION_SECRET=any-long-random-string npm start
+DATABASE_URL=postgres://user:pass@localhost:5432/fielora SESSION_SECRET=any-long-random-string npm start
 ```
 
 Then open http://localhost:3000. To connect to the Render database from your computer, use its **External** connection string and add `PGSSL=1`.

@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Field Service Scheduler",
-  "short_name": "Scheduler",
-  "description": "Scheduling, maintenance plans, trip planning and service reports for field service businesses.",
+  "name": "Fielora",
+  "short_name": "Fielora",
+  "description": "Fielora \u2014 scheduling, maintenance plans, trip planning and service reports for field service businesses.",
   "start_url": "/#schedule",
   "scope": "/",
   "display": "standalone",

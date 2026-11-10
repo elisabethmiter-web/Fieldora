@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Field Service Scheduler</title>
+<title>Fielora</title>
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#1D2125">
-<meta name="description" content="Field service job scheduler">
+<meta name="description" content="Fielora — scheduling and service reports for field service businesses">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Scheduler">
+<meta name="apple-mobile-web-app-title" content="Fielora">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -318,6 +318,7 @@ dialog .dlg-foot{position:sticky;bottom:0;background:var(--surface);z-index:2}
 .brand{min-width:0;flex:1}
 .brand img{height:34px;max-width:140px;object-fit:contain;background:#fff;border-radius:6px;padding:2px 4px;align-self:center}
 .brand b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
+@media (max-width:560px){.brand img:not([hidden]) ~ b,.brand img:not([hidden]) ~ small{display:none}.brand img{height:38px;max-width:150px}}
 .ind-types{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr);gap:6px 10px;align-items:center}
 .ind-types .k{font-size:13px;color:var(--ink-2)}
 .ind-types input[type=text]{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%}
@@ -340,7 +341,7 @@ body:not(.role-owner) .owner-only{display:none !important}
 <body>
 <header>
   <div class="bar">
-    <div class="brand"><img id="brandLogo" alt="" hidden><b id="brandName">Field Service</b><small>Job scheduler</small></div>
+    <div class="brand"><img id="brandLogo" alt="" hidden><b id="brandName">Fielora</b><small>Job scheduler</small></div>
     <button class="btn primary" id="newJobBtn">New job</button>
     <button class="btn acct" id="installBtn" hidden>Install app</button>
     <button class="btn acct" id="acctBtn">Account</button>
